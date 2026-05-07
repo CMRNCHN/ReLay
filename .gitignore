@@ -1,0 +1,43 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Xcode / Swift
+.build/
+DerivedData/
+.swiftpm/
+xcuserdata/
+*.xcuserstate
+*.moved-aside
+*.xcworkspace/xcuserdata/
+
+# Archives and binaries
+*.ipa
+*.dSYM
+*.app
+*.zip
+*.tar
+*.gz
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# AI session artifacts
+.ai_sessions/
+
+# Storage (generated at runtime — never commit)
+storage/debug-recordings/
+storage/gesture-logs/
+storage/transition-logs/
+storage/layout-snapshots/
+storage/workspace-snapshots/
+storage/diagnostics/
+
+# Recordings and media
+*.mov
+*.mp4
+*.wav
+*.mp3
