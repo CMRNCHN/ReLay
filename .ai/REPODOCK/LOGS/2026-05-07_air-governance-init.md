@@ -10,7 +10,7 @@
 
 ```json
 {
-  "project": "Swish.app",
+  "project": "ReLay",
   "current_status": "active",
   "summary": "Initial AI workspace checkpoint created.",
   "important_decisions": [
@@ -26,11 +26,11 @@
 
 ## This Session
 
-**Objective:** Establish stable, deterministic, architecture-safe Air workflow for Re-Lay.
+**Objective:** Establish stable, deterministic, architecture-safe Air workflow for ReLay.
 
 **Changes:**
 - Created `.ai/` governance structure (AIR_RULES.md, ARCHITECTURE_RULES.md, PRODUCT_PRINCIPLES.md, HANDOFF.md, PROJECT_STATE.md, NEXT_SESSION.md)
-- Created `Sources/SwishCore/` domain boundary tree with DOMAIN.md files
+- Created a temporary domain-boundary tree with DOMAIN.md files
 - Created `storage/` directory tree (debug-recordings, gesture-logs, transition-logs, layout-snapshots, workspace-snapshots, diagnostics)
 - Created `.gitignore`
 - Removed `ai_workspace/` (superseded by `.ai/`)

@@ -5,15 +5,15 @@
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
     <key>CFBundleExecutable</key>
-    <string>Swish</string>
+    <string>ReLay</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>CFBundleIdentifier</key>
-    <string>dev.local.Swish</string>
+    <string>dev.local.ReLay</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>Swish</string>
+    <string>ReLay</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -25,10 +25,10 @@
     <key>LSUIElement</key>
     <true/>
     <key>NSAppleEventsUsageDescription</key>
-    <string>Swish uses app automation only when needed to coordinate window management actions.</string>
+    <string>ReLay uses app automation only when needed to coordinate window management actions.</string>
     <key>NSInputMonitoringUsageDescription</key>
-    <string>Swish needs Input Monitoring to receive global trackpad gestures while your pointer is over another app's title bar.</string>
+    <string>ReLay needs Input Monitoring to receive global trackpad gestures while your pointer is over another app's title bar.</string>
     <key>NSAccessibilityUsageDescription</key>
-    <string>Swish requires Accessibility permissions to move and resize windows.</string>
+    <string>ReLay requires Accessibility permissions to move and resize windows.</string>
 </dict>
 </plist>

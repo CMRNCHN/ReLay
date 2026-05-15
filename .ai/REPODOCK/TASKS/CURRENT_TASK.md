@@ -2,7 +2,7 @@
 
 ## Task Title
 
-Assess project state and map plan to human-testing readiness
+Normalize stale project naming to ReLay
 
 ## Request Date
 
@@ -14,61 +14,55 @@ Completed
 
 ## Objective
 
-Review the current repository state and define a long-term plan to reach a practical "ready for human testing" milestone.
+Keep useful historical material, rename stale project-name references to `ReLay`, and remove legacy material that no longer helps.
 
 ## Start-Of-Task Review Summary
 
-- reviewed governance, agent, architecture, project-state, context, task, next-session, and active-plan files
-- inspected package structure, source layout, and current test target contents
-- verified current build and test status instead of relying on older session notes
+- reviewed the required governance and RepoDock task surfaces
+- scanned the repository for legacy names including `Swish`, `SwishCore`, `Swish.app`, and `Re-Lay`
+- separated active metadata from stale archival scaffolding
 
 ## Constraints
 
-- keep the work scoped to assessment and planning
-- do not rewrite product direction while defining readiness
-- do not overwrite unrelated in-flight source work
+- keep the cleanup scoped to naming and stale-material removal
+- avoid changing live runtime source behavior
+- preserve historical context only where it still adds value
 
 ## Files Expected To Change
 
-- `.ai/REPODOCK/CURRENT/PROJECT_STATE.md`
-- `.ai/REPODOCK/PLANS/*`
-- `.ai/REPODOCK/TASKS/NEXT_SESSION.md`
-- `.ai/REPODOCK/HANDOFFS/LATEST_HANDOFF.md`
-- `.ai/REPODOCK/LOGS/*`
+- `AppBundleContents/Info.plist`
+- `.ai/REPODOCK/*`
+- stale legacy docs under `Sources/SwishCore/`
 
 ## Files Actually Changed
 
-- `.ai/REPODOCK/CURRENT/PROJECT_STATE.md`
-- `.ai/REPODOCK/PLANS/ACTIVE_PLAN.md`
-- `.ai/REPODOCK/PLANS/READY_FOR_HUMAN_TESTING.md`
+- `AppBundleContents/Info.plist`
 - `.ai/REPODOCK/TASKS/CURRENT_TASK.md`
-- `.ai/REPODOCK/TASKS/NEXT_SESSION.md`
 - `.ai/REPODOCK/HANDOFFS/LATEST_HANDOFF.md`
-- `.ai/REPODOCK/LOGS/2026-05-15_readiness-plan.md`
+- `.ai/REPODOCK/LOGS/2026-05-07_air-governance-init.md`
+- `.ai/REPODOCK/LOGS/2026-05-15_name-normalization.md`
+- deleted legacy `Sources/SwishCore/*/DOMAIN.md` files
 
 ## Verification Performed
 
-- enumerated current sources and tests
-- read runtime entry, transition, interceptor, resolver, store, and state-graph files
-- ran `swift build`
-- ran `swift test`
-- confirmed both currently fail on `TitleBarInterceptor.swift`
+- searched the repo for legacy names
+- confirmed the remaining actionable stale references were in bundle metadata and dead legacy scaffolding
+- removed the unused `Sources/SwishCore` domain-doc tree and updated name-bearing metadata
 
 ## Architecture Boundaries Touched
 
-- governance and planning documents only
+- documentation and metadata only
 
 ## Behavior Changes
 
-- no runtime behavior changed
-- project state now reflects the current non-buildable baseline
-- the repo now has an explicit long-term readiness plan
+- old bundle metadata now presents the app as `ReLay`
+- stale `SwishCore` scaffolding is removed so current structure is less ambiguous
 
 ## Risks / Follow-Ups
 
-- the current readiness plan depends on first restoring a buildable baseline
-- human testing should not start until compile health, focused tests, and manual test flow exist together
+- `AppBundleContents/Info.plist` is legacy bundle material and may not be part of the current SwiftPM launch path
+- live source/module names like `ReLayCore` remain unchanged, by design
 
 ## Next Task Recommendation
 
-Restore a clean build and test baseline by fixing the current `TitleBarInterceptor.swift` syntax break, then add the first focused semantic-core tests.
+Fix the current `TitleBarInterceptor.swift` compile failure, then add semantic-core tests.

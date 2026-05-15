@@ -2,44 +2,42 @@
 
 **Project:** ReLay
 **Last Updated:** 2026-05-15
-**Session Type:** project-state review and readiness planning
+**Session Type:** naming normalization and stale-material cleanup
 
 ---
 
 ## Objective
 
-Review the actual repository state and define a long-term plan to reach "ready for human testing."
+Keep useful historical material, rename stale project references to `ReLay`, and remove legacy content that no longer adds value.
 
 ## What Changed
 
-- reviewed governance and RepoDock state
-- inspected package structure, runtime layers, and test surface
-- verified current status with `swift build` and `swift test`
-- corrected `PROJECT_STATE.md` to reflect that the current worktree does not build
-- added `READY_FOR_HUMAN_TESTING.md`
-- updated `ACTIVE_PLAN.md` and `NEXT_SESSION.md` to prioritize baseline recovery
+- updated old bundle metadata in `AppBundleContents/Info.plist` from `Swish` to `ReLay`
+- removed the unused legacy `Sources/SwishCore` domain-doc scaffold
+- normalized remaining useful historical log references from old product names to `ReLay`
 
 ## Boundaries Touched
 
-- governance and planning documentation only
+- metadata
+- documentation
+- unused legacy scaffolding
 
 ## Behavioral Impact
 
-- no runtime behavior changed
-- the repo now has a concrete staged path to human-testing readiness
-- near-term priorities now start with restoring buildability
+- no runtime source behavior changed
+- repository naming is less ambiguous
+- stale architecture placeholders no longer compete with the actual `Sources/ReLayCore` layout
 
 ## Risks Introduced
 
-- no code fixes were made in this task
-- the plan assumes the current compile break is an in-flight regression, not an intentional hold point
+- `AppBundleContents/Info.plist` may not be part of the active SwiftPM runtime path
+- no compile or runtime validation was performed in this cleanup task
 
 ## Follow-Up Pressure
 
-- fix the compile break before any further readiness claims
-- add semantic-core tests immediately after build recovery
-- narrow the first human-test scope to stable two-finger behaviors
+- fix the current compile break before doing broader cleanup
+- only rename deeper code/module identifiers if there is a concrete product or packaging reason
 
 ## Next Recommended Task
 
-Fix the current `TitleBarInterceptor.swift` compile failure, then add focused semantic-core tests.
+Fix the compile failure in `TitleBarInterceptor.swift`, then add focused semantic-core tests.
