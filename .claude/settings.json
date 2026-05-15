@@ -1,0 +1,11 @@
+Before making changes, read:
+.ai/AIR_RULES.md
+.ai/PROJECT_STATE.md
+.ai/HANDOFF.md
+.ai/NEXT_SESSION.md
+.ai/ARCHITECTURE_RULES.md
+.ai/PRODUCT_PRINCIPLES.md
+
+Preserve deterministic behavior, low abstraction depth, and the GestureEngine → SpatialTransitionEngine → LayoutResolver → LayoutOrchestrator chain.
+
+Do not redesign architecture, rename modules, move files, introduce frameworks, or add abstractions unless explicitly requested.

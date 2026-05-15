@@ -46,28 +46,43 @@ struct WindowRecord {
 
 /// Persistent, in-process store of semantic layout state per window.
 /// Source of truth for "where is this window in the state graph."
-class WindowStateStore {
-    static let shared = WindowStateStore()
+public final class WindowStateStore {
+    public static let shared = WindowStateStore()
     private var records: [WindowID: WindowRecord] = [:]
-    private init() {}
+    private init() {
+        AppLogger.log("window state store initialized", subsystem: "state")
+    }
 
     func record(for window: AXUIElement) -> WindowRecord? {
         return records[WindowID(element: window)]
     }
 
     func setRecord(_ record: WindowRecord, for window: AXUIElement) {
-        records[WindowID(element: window)] = record
+        let id = WindowID(element: window)
+        let previousState = records[id]?.currentState
+        records[id] = record
+
+        if let previousState {
+            if previousState != record.currentState {
+                AppLogger.log("state transition \(previousState) -> \(record.currentState)", subsystem: "state")
+            }
+        } else {
+            AppLogger.log("created state record state=\(record.currentState)", subsystem: "state")
+        }
     }
 
     func updateState(_ state: WindowLayoutState, for window: AXUIElement) {
         if var record = records[WindowID(element: window)] {
+            let previousState = record.currentState
             record.transition(to: state)
             records[WindowID(element: window)] = record
+            AppLogger.log("state transition \(previousState) -> \(state)", subsystem: "state")
         }
     }
 
     func removeRecord(for window: AXUIElement) {
         records.removeValue(forKey: WindowID(element: window))
+        AppLogger.log("removed state record", subsystem: "state")
     }
 
     func currentState(for window: AXUIElement) -> WindowLayoutState? {

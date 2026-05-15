@@ -1,0 +1,16 @@
+{
+  "environment": [
+    {
+      "type": "env",
+      "key": "RELAY_ENV",
+      "value": "development"
+    }
+  ],
+  "setup": {
+    "macos": [
+      "cd \"$AIR_WORKTREE_ROOT\"",
+      "swift package resolve",
+      "swift build"
+    ]
+  }
+}

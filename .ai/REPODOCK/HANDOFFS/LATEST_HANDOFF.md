@@ -2,42 +2,45 @@
 
 **Project:** ReLay
 **Last Updated:** 2026-05-15
-**Session Type:** naming normalization and stale-material cleanup
+**Session Type:** full worktree snapshot commit
 
 ---
 
 ## Objective
 
-Keep useful historical material, rename stale project references to `ReLay`, and remove legacy content that no longer adds value.
+Commit the full current repository state, including the remaining runtime source work and local repo tooling files.
 
 ## What Changed
 
-- updated old bundle metadata in `AppBundleContents/Info.plist` from `Swish` to `ReLay`
-- removed the unused legacy `Sources/SwishCore` domain-doc scaffold
-- normalized remaining useful historical log references from old product names to `ReLay`
+- bundled the remaining runtime changes in `main.swift`, gesture/transition/store/resolver code, and `TitleBarInterceptor.swift`
+- included new support files such as `AccessibilityBootstrap.swift` and `AppLogger.swift`
+- included the current test target contents and local repo tooling/config files
+- updated RepoDock task and handoff records to reflect the snapshot commit
 
 ## Boundaries Touched
 
-- metadata
-- documentation
-- unused legacy scaffolding
+- app bootstrap
+- runtime observability
+- gesture ingress path
+- transition/state pipeline
+- repo tooling metadata
 
 ## Behavioral Impact
 
-- no runtime source behavior changed
-- repository naming is less ambiguous
-- stale architecture placeholders no longer compete with the actual `Sources/ReLayCore` layout
+- the current runtime instrumentation and ingress work is now captured in version control
+- local tooling config is also captured in version control
+- build health is still not restored in this snapshot
 
 ## Risks Introduced
 
-- `AppBundleContents/Info.plist` may not be part of the active SwiftPM runtime path
-- no compile or runtime validation was performed in this cleanup task
+- the commit includes known non-green code
+- the commit includes local tooling/config files that may not be portable across environments
 
 ## Follow-Up Pressure
 
-- fix the current compile break before doing broader cleanup
-- only rename deeper code/module identifiers if there is a concrete product or packaging reason
+- restore compile and test health immediately
+- decide later whether all committed local tooling files belong in the permanent repo surface
 
 ## Next Recommended Task
 
-Fix the compile failure in `TitleBarInterceptor.swift`, then add focused semantic-core tests.
+Fix the compile break in `TitleBarInterceptor.swift`, then get `swift build` and `swift test` passing.

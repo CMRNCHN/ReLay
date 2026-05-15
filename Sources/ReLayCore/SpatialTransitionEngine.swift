@@ -7,8 +7,8 @@ import Accessibility
 /// The semantic orchestrator. Sits between GestureEngine (physics) and
 /// LayoutOrchestrator (animation). Owns the state machine, drives preview
 /// interpolation, and manages multi-window layout operations.
-class SpatialTransitionEngine {
-    static let shared = SpatialTransitionEngine()
+public final class SpatialTransitionEngine {
+    public static let shared = SpatialTransitionEngine()
 
     private let graph    = LayoutTransitionGraph()
     private let store    = WindowStateStore.shared
@@ -28,11 +28,14 @@ class SpatialTransitionEngine {
     private var stageManagerWasEnabled: Bool = false
     private var isInTiledMode: Bool { !tiledEntries.isEmpty }
 
-    private init() {}
+    private init() {
+        AppLogger.log("spatial transition engine initialized", subsystem: "transition")
+    }
 
     // MARK: - Gesture Session Lifecycle
 
     func beginSession(window: AXUIElement, fingerCount: Int, at location: CGPoint) {
+        AppLogger.log("session begin fingers=\(fingerCount)", subsystem: "transition")
         sessionWindow        = window
         sessionFingerCount   = fingerCount
         sessionStartLocation = location
@@ -42,6 +45,7 @@ class SpatialTransitionEngine {
         if store.record(for: window) == nil {
             let screen   = animator.getUsableScreenFrame(for: window)
             let inferred = resolver.inferState(from: sessionStartFrame, on: screen)
+            AppLogger.log("bootstrapped window state=\(inferred)", subsystem: "transition")
             let record   = WindowRecord(
                 currentState: inferred,
                 floatingFrame: inferred == .floating ? sessionStartFrame : nil
@@ -81,6 +85,10 @@ class SpatialTransitionEngine {
         defer { clearSession() }
         guard let window = sessionWindow else { return }
         let direction = GestureDirection(effectiveX: effectiveX, effectiveY: effectiveY)
+        AppLogger.log(
+            "transition request fingers=\(fingerCount) direction=\(direction.map { String(describing: $0) } ?? "none")",
+            subsystem: "transition"
+        )
 
         if fingerCount >= 4 {
             if let dir = direction, dir == .up {
@@ -102,6 +110,7 @@ class SpatialTransitionEngine {
 
     func cancelSession() {
         defer { clearSession() }
+        AppLogger.log("transition session cancelled", subsystem: "transition")
         guard let window = sessionWindow, !sessionStartFrame.isEmpty else {
             PreviewManager.shared.dismiss(animated: true)
             return
@@ -117,11 +126,14 @@ class SpatialTransitionEngine {
         let currentState = record.currentState
 
         guard let nextState = graph.nextState(from: currentState, moving: direction) else {
+            AppLogger.log("no transition available from=\(currentState) direction=\(direction)", subsystem: "transition")
             // Edge of the graph — snap back
             animator.animateWindowFrame(window, to: sessionStartFrame, duration: 0.120)
             PreviewManager.shared.dismiss(animated: true)
             return
         }
+
+        AppLogger.log("state transition request \(currentState) -> \(nextState)", subsystem: "transition")
 
         // Capture floating frame before first managed placement
         if currentState == .floating, record.floatingFrame == nil {
@@ -132,6 +144,7 @@ class SpatialTransitionEngine {
         store.setRecord(record, for: window)
 
         let screen      = animator.getUsableScreenFrame(for: window)
+        AppLogger.log("layout resolution request state=\(nextState)", subsystem: "transition")
         let targetFrame = targetFrame(for: nextState, window: window, screen: screen)
 
         PreviewManager.shared.commitOverlay(finalFrame: targetFrame)
@@ -142,6 +155,7 @@ class SpatialTransitionEngine {
 
     private func executeAutoLayout(triggerWindow: AXUIElement) {
         let screen = animator.getUsableScreenFrame(for: triggerWindow)
+        AppLogger.log("layout resolution request state=fullscreen auto-layout", subsystem: "transition")
         let target = resolver.frame(for: .fullscreen, on: screen)
 
         if var record = store.record(for: triggerWindow) {
@@ -155,6 +169,7 @@ class SpatialTransitionEngine {
     }
 
     private func executeThreeColumnLayout(triggerWindow: AXUIElement) {
+        AppLogger.log("transition request three-column layout", subsystem: "transition")
         let screen  = animator.getUsableScreenFrame(for: triggerWindow)
         var windows = animator.getAllVisibleWindows()
         guard windows.count >= 3 else { executeAutoLayout(triggerWindow: triggerWindow); return }
@@ -176,6 +191,7 @@ class SpatialTransitionEngine {
     }
 
     private func executeStageManagerLayout(triggerWindow: AXUIElement) {
+        AppLogger.log("transition request stage-manager layout", subsystem: "transition")
         let screen  = animator.getUsableScreenFrame(for: triggerWindow)
         let windows = animator.getAllVisibleWindows()
         guard !windows.isEmpty else { return }
@@ -192,6 +208,7 @@ class SpatialTransitionEngine {
     }
 
     private func executeExitLayout(triggerWindow: AXUIElement) {
+        AppLogger.log("transition request exit-layout", subsystem: "transition")
         // Exit native full screen first if applicable
         var fsRef: CFTypeRef?
         if AXUIElementCopyAttributeValue(triggerWindow, "AXFullScreen" as CFString, &fsRef) == .success,
@@ -233,6 +250,7 @@ class SpatialTransitionEngine {
     }
 
     private func clearSession() {
+        AppLogger.log("transition session cleared", subsystem: "transition")
         sessionWindow        = nil
         sessionStartFrame    = .zero
         sessionFingerCount   = 2

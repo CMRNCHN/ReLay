@@ -1,0 +1,24 @@
+{
+  "configurations": [
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:ReLay}",
+      "name": "Debug ReLay",
+      "target": "ReLay",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug ReLay"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:ReLay}",
+      "name": "Release ReLay",
+      "target": "ReLay",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release ReLay"
+    }
+  ]
+}

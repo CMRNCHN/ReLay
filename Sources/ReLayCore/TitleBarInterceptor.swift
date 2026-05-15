@@ -1,10 +1,9 @@
-import ApplicationServices
 import Cocoa
 import ApplicationServices
 import Accessibility
 
 /// Delegate protocol to pass clean gesture lifecycle events to the Gesture Engine.
-protocol TitleBarInterceptorDelegate: AnyObject {
+public protocol TitleBarInterceptorDelegate: AnyObject {
     func gestureDidBegin(on window: AXUIElement, at location: CGPoint, fingerCount: Int)
     func gestureDidChange(deltaX: CGFloat, deltaY: CGFloat, velocity: CGFloat)
     func gestureDidEnd()
@@ -12,9 +11,102 @@ protocol TitleBarInterceptorDelegate: AnyObject {
     func gestureDidDoubleTap(on window: AXUIElement)
 }
 
-class TitleBarInterceptor {
+public final class TitleBarInterceptor {
+    private enum HitQualification {
+        case accepted(String)
+        case semanticMiss(String)
+        case geometricMiss(String)
+    }
+
+    private struct ChromeSignals {
+        let hitRole: String
+        let hitSubrole: String
+        let ancestryRoles: [String]
+        let windowChildRoles: Set<String>
+
+        var hasTabGroup: Bool {
+            ancestryRoles.contains("AXTabGroup") || windowChildRoles.contains("AXTabGroup")
+        }
+
+        var hasToolbar: Bool {
+            ancestryRoles.contains("AXToolbar") || windowChildRoles.contains("AXToolbar")
+        }
+
+        var hasContentOwnership: Bool {
+            ancestryRoles.contains(where: Self.contentRoles.contains)
+        }
+
+        var allowsNormalizedTopBandOwnership: Bool {
+            if hasContentOwnership {
+                return false
+            }
+            if hasTabGroup || hasToolbar {
+                return true
+            }
+            return ancestryRoles.contains(where: Self.chromeRoles.contains)
+        }
+
+        var variant: String {
+            if hasTabGroup {
+                return "tabbed"
+            }
+            if hasToolbar && windowChildRoles.contains("AXGroup") {
+                return "blended-toolbar"
+            }
+            if hasToolbar {
+                return "unified-toolbar"
+            }
+            if ancestryRoles.contains("AXTitleBar") {
+                return "standard-titlebar"
+            }
+            if hasContentOwnership {
+                return "content-owned"
+            }
+            return "undifferentiated"
+        }
+
+        var topBandHeight: CGFloat {
+            if hasTabGroup {
+                return 112.0
+            }
+            if hasToolbar {
+                return 96.0
+            }
+            return 84.0
+        }
+
+        private static let chromeRoles: Set<String> = [
+            "AXTitleBar",
+            "AXToolbar",
+            "AXTabGroup",
+            "AXButton",
+            "AXStaticText",
+            "AXGroup"
+        ]
+
+        private static let contentRoles: Set<String> = [
+            "AXWebArea",
+            "AXScrollArea",
+            "AXOutline",
+            "AXTable",
+            "AXRow",
+            "AXCell",
+            "AXTextArea",
+            "AXTextField",
+            "AXCollectionView",
+            "AXList",
+            "AXSplitGroup"
+        ]
+    }
+
+    private struct WindowContextResolution {
+        let window: AXUIElement?
+        let semanticTitleSource: String?
+        let hitRole: String
+        let hitSubrole: String
+    }
     
-    weak var delegate: TitleBarInterceptorDelegate?
+    public weak var delegate: TitleBarInterceptorDelegate?
 
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
@@ -26,12 +118,11 @@ class TitleBarInterceptor {
     private var lastKnownTouchCount: Int = 2
 
     // Configuration
-    private let titleBarHeightThreshold: CGFloat = 40.0 // Accommodates modern Big Sur+ toolbars
-
-    init() {}
+    public init() {}
     
     /// Starts intercepting global mouse events
-    func start() throws {
+    public func start() throws {
+        AppLogger.log("starting event tap setup", subsystem: "interceptor")
         let eventMask = (1 << CGEventType.scrollWheel.rawValue) | (1 << CGEventType.leftMouseDown.rawValue)
         
         let observer = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
@@ -50,24 +141,30 @@ class TitleBarInterceptor {
         )
         
         guard let eventTap = eventTap else {
+            AppLogger.log("failed to create event tap", subsystem: "interceptor")
             throw InterceptorError.failedToCreateEventTap
         }
 
         runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, eventTap, 0)
         CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
         CGEvent.tapEnable(tap: eventTap, enable: true)
+        AppLogger.log("event tap enabled", subsystem: "interceptor")
 
         // Secondary monitor: gesture events (type 29) expose touch count via NSTouch
         gestureMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: NSEvent.EventTypeMask(rawValue: 1 << 29)
         ) { [weak self] event in
             let count = event.touches(matching: .touching, in: nil).count
-            if count > 0 { self?.lastKnownTouchCount = count }
+            if count > 0 {
+                self?.lastKnownTouchCount = count
+                AppLogger.log("touch count observed count=\(count)", subsystem: "interceptor")
+            }
         }
+        AppLogger.log("gesture monitor installed", subsystem: "interceptor")
     }
     
     /// Stops the global event tap
-    func stop() {
+    public func stop() {
         if let eventTap = eventTap {
             CGEvent.tapEnable(tap: eventTap, enable: false)
             if let runLoopSource = runLoopSource {
@@ -90,6 +187,7 @@ class TitleBarInterceptor {
             if let tap = eventTap {
                 CGEvent.tapEnable(tap: tap, enable: true)
             }
+            AppLogger.log("event tap re-enabled after system disable", subsystem: "interceptor")
             return Unmanaged.passUnretained(event)
         }
 
@@ -114,15 +212,19 @@ class TitleBarInterceptor {
         
         // Phase: Began (Start of a physical gesture)
         if phase == .began {
+            AppLogger.log("scroll phase began", subsystem: "interceptor")
             let location = event.unflippedLocation
             
             if let window = hitTestTitleBar(at: location) {
                 isTrackingGesture = true
                 activeTargetWindow = window
+                AppLogger.log("title bar hit; beginning gesture tracking fingers=\(lastKnownTouchCount)", subsystem: "interceptor")
                 delegate?.gestureDidBegin(on: window, at: location, fingerCount: lastKnownTouchCount)
                 
                 // Swallow the event to prevent underlying scroll
                 return nil 
+            } else {
+                AppLogger.log("scroll began outside title bar hit region", subsystem: "interceptor")
             }
         }
         
@@ -133,12 +235,14 @@ class TitleBarInterceptor {
             let deltaY = nsEvent.scrollingDeltaY
             let velocity = sqrt(deltaX * deltaX + deltaY * deltaY) * 60.0 
             
+            AppLogger.log("scroll phase changed while tracking", subsystem: "interceptor")
             delegate?.gestureDidChange(deltaX: deltaX, deltaY: deltaY, velocity: velocity)
             return nil // Swallow event
         }
         
         // Phase: Ended or Cancelled
         if (phase == .ended || phase == .cancelled || momentumPhase == .began) && isTrackingGesture {
+            AppLogger.log("scroll gesture finished phase=\(phase.rawValue) momentum=\(momentumPhase.rawValue)", subsystem: "interceptor")
             if phase == .cancelled {
                 delegate?.gestureDidCancel()
             } else {
@@ -163,48 +267,124 @@ class TitleBarInterceptor {
         var element: AXUIElement?
         let error = AXUIElementCopyElementAtPosition(systemWideElement, Float(point.x), Float(point.y), &element)
         
-        guard error == .success, let hitElement = element else { return nil }
+        guard error == .success, let hitElement = element else {
+            AppLogger.log("ax hit test failed point=(\(Int(point.x)),\(Int(point.y))) error=\(error.rawValue)", subsystem: "interceptor")
+            return nil
+        }
         
-        // Traverse up the AX hierarchy to find the parent Window
-        guard let window = findParentWindow(for: hitElement) else { return nil }
-        
-        // Verify the window frame
-        var position: CFTypeRef?
-        var size: CFTypeRef?
-        
-        guard AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &position) == .success,
-              AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &size) == .success else {
+        let resolution = resolveWindowContext(for: hitElement)
+
+        guard let window = resolution.window else {
+            AppLogger.log(
+                "semantic miss reason=no-parent-window point=(\(Int(point.x)),\(Int(point.y))) role=\(resolution.hitRole) subrole=\(resolution.hitSubrole)",
+                subsystem: "interceptor"
+            )
             return nil
         }
 
-        guard let positionValue = position,
-              let sizeValue = size,
-              CFGetTypeID(positionValue) == AXValueGetTypeID(),
-              CFGetTypeID(sizeValue) == AXValueGetTypeID() else {
-            return nil
-        }
-        
-        var cgPosition = CGPoint.zero
-        var cgSize = CGSize.zero
+        let owner = appName(for: window)
+        let signals = chromeSignals(for: hitElement, window: window)
 
-        guard AXValueGetValue(unsafeBitCast(positionValue, to: AXValue.self), .cgPoint, &cgPosition),
-              AXValueGetValue(unsafeBitCast(sizeValue, to: AXValue.self), .cgSize, &cgSize) else {
+        let qualification = qualifyHit(
+            at: point,
+            window: window,
+            semanticSource: resolution.semanticTitleSource,
+            signals: signals
+        )
+
+        switch qualification {
+        case .accepted(let reason):
+            AppLogger.log(
+                "title bar hit app=\(owner) variant=\(signals.variant) hitRole=\(signals.hitRole) via \(reason)",
+                subsystem: "interceptor"
+            )
+            return window
+        case .semanticMiss(let reason):
+            AppLogger.log(
+                "semantic miss app=\(owner) variant=\(signals.variant) hitRole=\(signals.hitRole) subrole=\(signals.hitSubrole) reason=\(reason)",
+                subsystem: "interceptor"
+            )
+            return nil
+        case .geometricMiss(let reason):
+            AppLogger.log(
+                "geometric miss app=\(owner) variant=\(signals.variant) hitRole=\(signals.hitRole) subrole=\(signals.hitSubrole) reason=\(reason)",
+                subsystem: "interceptor"
+            )
             return nil
         }
-        
-        // Check if the click is within the top bounds (Title Bar region)
-        let isWithinTitleBarHeight = (point.y >= cgPosition.y) && (point.y <= cgPosition.y + titleBarHeightThreshold)
-        
-        return isWithinTitleBarHeight ? window : nil
     }
     
+    private func resolveWindowContext(for element: AXUIElement) -> WindowContextResolution {
+        let hitRole = axStringAttribute(kAXRoleAttribute, on: element) ?? "unknown"
+        let hitSubrole = axStringAttribute(kAXSubroleAttribute, on: element) ?? "none"
+        var containsTitleBar = false
+        let window = findParentWindow(for: element, containsTitleBar: &containsTitleBar)
+        guard let window else {
+            return WindowContextResolution(
+                window: nil,
+                semanticTitleSource: containsTitleBar ? "ax-ancestry" : nil,
+                hitRole: hitRole,
+                hitSubrole: hitSubrole
+            )
+        }
+        if containsTitleBar {
+            return WindowContextResolution(
+                window: window,
+                semanticTitleSource: "ax-ancestry",
+                hitRole: hitRole,
+                hitSubrole: hitSubrole
+            )
+        }
+        if isElementInSemanticRegion(element, attribute: kAXTitleUIElementAttribute, of: window) {
+            return WindowContextResolution(
+                window: window,
+                semanticTitleSource: "ax-title-ui",
+                hitRole: hitRole,
+                hitSubrole: hitSubrole
+            )
+        }
+        if isElementInSemanticRegion(element, attribute: kAXHeaderAttribute, of: window) {
+            return WindowContextResolution(
+                window: window,
+                semanticTitleSource: "ax-header",
+                hitRole: hitRole,
+                hitSubrole: hitSubrole
+            )
+        }
+        return WindowContextResolution(
+            window: window,
+            semanticTitleSource: nil,
+            hitRole: hitRole,
+            hitSubrole: hitSubrole
+        )
+    }
+
     /// Recursively traverses the Accessibility tree to find the nearest `kAXWindowRole`
-    private func findParentWindow(for element: AXUIElement) -> AXUIElement? {
+    private func findParentWindow(for element: AXUIElement, containsTitleBar: inout Bool) -> AXUIElement? {
+        if let directWindow = axElementAttribute(kAXWindowAttribute, on: element) {
+            return directWindow
+        }
+        if let topLevelElement = axElementAttribute(kAXTopLevelUIElementAttribute, on: element) {
+            return topLevelElement
+        }
+
         var role: CFTypeRef?
         if AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role) == .success {
-            if let roleString = role as? String, roleString == kAXWindowRole {
-                return element
+            if let roleString = role as? String {
+                if roleString == "AXTitleBar" {
+                    containsTitleBar = true
+                }
+                if roleString == kAXWindowRole {
+                    return element
+                }
             }
+        }
+
+        var subrole: CFTypeRef?
+        if AXUIElementCopyAttributeValue(element, kAXSubroleAttribute as CFString, &subrole) == .success,
+           let subroleString = subrole as? String,
+           subroleString == "AXTitleBar" {
+            containsTitleBar = true
         }
         
         var parent: CFTypeRef?
@@ -212,11 +392,167 @@ class TitleBarInterceptor {
             if let parent,
                CFGetTypeID(parent) == AXUIElementGetTypeID() {
                 let parentElement = unsafeBitCast(parent, to: AXUIElement.self)
-                return findParentWindow(for: parentElement)
+                return findParentWindow(for: parentElement, containsTitleBar: &containsTitleBar)
             }
         }
         
         return nil
+    }
+
+    private func axStringAttribute(_ attribute: String, on element: AXUIElement) -> String? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else {
+            return nil
+        }
+        return value as? String
+    }
+
+    private func axElementAttribute(_ attribute: String, on element: AXUIElement) -> AXUIElement? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
+              let value,
+              CFGetTypeID(value) == AXUIElementGetTypeID() else {
+            return nil
+        }
+        return unsafeBitCast(value, to: AXUIElement.self)
+    }
+
+    private func isElementInSemanticRegion(_ element: AXUIElement, attribute: String, of window: AXUIElement) -> Bool {
+        guard let regionElement = axElementAttribute(attribute, on: window) else {
+            return false
+        }
+        return ancestryContains(element, target: regionElement)
+    }
+
+    private func ancestryContains(_ element: AXUIElement, target: AXUIElement) -> Bool {
+        if CFEqual(element, target) {
+            return true
+        }
+
+        var parent: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXParentAttribute as CFString, &parent) == .success,
+              let parent,
+              CFGetTypeID(parent) == AXUIElementGetTypeID() else {
+            return false
+        }
+
+        let parentElement = unsafeBitCast(parent, to: AXUIElement.self)
+        return ancestryContains(parentElement, target: target)
+    }
+
+    private func appName(for element: AXUIElement) -> String {
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(element, &pid) == .success,
+              let app = NSRunningApplication(processIdentifier: pid) else {
+            return "unknown"
+        }
+        return app.localizedName ?? app.bundleIdentifier ?? "pid-\(pid)"
+    }
+
+    private func qualifyHit(
+        at point: CGPoint,
+        window: AXUIElement,
+        semanticSource: String?,
+        signals: ChromeSignals
+    ) -> HitQualification {
+        if let semanticSource {
+            return .accepted(semanticSource)
+        }
+
+        guard let frame = windowFrame(for: window) else {
+            return .semanticMiss("window-frame-unavailable")
+        }
+
+        let titleBarMinY = frame.origin.y + frame.size.height - signals.topBandHeight
+        let titleBarMaxY = frame.origin.y + frame.size.height
+        let isWithinTopBand = point.y >= titleBarMinY && point.y <= titleBarMaxY
+
+        guard isWithinTopBand else {
+            return .geometricMiss(
+                "pointY=\(Int(point.y)) titleBarMinY=\(Int(titleBarMinY)) titleBarMaxY=\(Int(titleBarMaxY)) windowY=\(Int(frame.origin.y)) windowHeight=\(Int(frame.size.height))"
+            )
+        }
+
+        if signals.hasContentOwnership {
+            return .semanticMiss("content-ownership ancestry=\(signals.ancestryRoles.joined(separator: \">\"))".replacingOccurrences(of: "\\>", with: ">"))
+        }
+
+        if signals.allowsNormalizedTopBandOwnership {
+            return .accepted("normalized-\(signals.variant)")
+        }
+
+        return .semanticMiss("ambiguous-ownership ancestry=\(signals.ancestryRoles.joined(separator: \">\"))".replacingOccurrences(of: "\\>", with: ">"))
+    }
+
+    private func chromeSignals(for element: AXUIElement, window: AXUIElement) -> ChromeSignals {
+        ChromeSignals(
+            hitRole: axStringAttribute(kAXRoleAttribute, on: element) ?? "unknown",
+            hitSubrole: axStringAttribute(kAXSubroleAttribute, on: element) ?? "none",
+            ancestryRoles: ancestryRoles(for: element),
+            windowChildRoles: childRoles(for: window)
+        )
+    }
+
+    private func ancestryRoles(for element: AXUIElement) -> [String] {
+        var roles: [String] = []
+        var currentElement: AXUIElement? = element
+        var depth = 0
+
+        while depth < 12 {
+            guard let element = currentElement else {
+                break
+            }
+
+            if let role = axStringAttribute(kAXRoleAttribute, on: element) {
+                roles.append(role)
+            }
+
+            var parent: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(element, kAXParentAttribute as CFString, &parent) == .success,
+                  let parent,
+                  CFGetTypeID(parent) == AXUIElementGetTypeID() else {
+                break
+            }
+
+            currentElement = unsafeBitCast(parent, to: AXUIElement.self)
+            depth += 1
+        }
+
+        return roles
+    }
+
+    private func childRoles(for element: AXUIElement) -> Set<String> {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &value) == .success,
+              let children = value as? [AXUIElement] else {
+            return []
+        }
+
+        return Set(children.compactMap { axStringAttribute(kAXRoleAttribute, on: $0) })
+    }
+
+    private func windowFrame(for window: AXUIElement) -> CGRect? {
+        var position: CFTypeRef?
+        var size: CFTypeRef?
+
+        guard AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &position) == .success,
+              AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &size) == .success,
+              let positionValue = position,
+              let sizeValue = size,
+              CFGetTypeID(positionValue) == AXValueGetTypeID(),
+              CFGetTypeID(sizeValue) == AXValueGetTypeID() else {
+            return nil
+        }
+
+        var cgPosition = CGPoint.zero
+        var cgSize = CGSize.zero
+
+        guard AXValueGetValue(unsafeBitCast(positionValue, to: AXValue.self), .cgPoint, &cgPosition),
+              AXValueGetValue(unsafeBitCast(sizeValue, to: AXValue.self), .cgSize, &cgSize) else {
+            return nil
+        }
+
+        return CGRect(origin: cgPosition, size: cgSize)
     }
     
     private func resetState() {

@@ -76,6 +76,7 @@ class LayoutResolver {
     /// Infers the semantic state of an arbitrary frame. Used when a window
     /// is touched for the first time and has no entry in WindowStateStore.
     func inferState(from frame: CGRect, on screen: CGRect) -> WindowLayoutState {
+        AppLogger.log("inferring state from frame", subsystem: "resolver")
         let candidates = WindowLayoutState.allCases.filter { $0 != .floating }
         for state in candidates {
             let expected = self.frame(for: state, on: screen)

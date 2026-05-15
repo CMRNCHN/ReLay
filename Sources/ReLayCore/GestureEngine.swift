@@ -6,7 +6,10 @@ import Accessibility
 // All semantic meaning (states, frames, actions) lives in SpatialTransitionEngine.
 enum GestureAxis { case horizontal, vertical }
 
-class GestureEngine: TitleBarInterceptorDelegate {
+public final class GestureEngine: TitleBarInterceptorDelegate {
+    public init() {
+        AppLogger.log("gesture engine initialized", subsystem: "gesture")
+    }
 
     // MARK: - Thresholds
 
@@ -26,19 +29,20 @@ class GestureEngine: TitleBarInterceptorDelegate {
 
     // MARK: - TitleBarInterceptorDelegate
 
-    func gestureDidBegin(on window: AXUIElement, at location: CGPoint, fingerCount: Int) {
+    public func gestureDidBegin(on window: AXUIElement, at location: CGPoint, fingerCount: Int) {
         axisLocked         = nil
         accumulatedX       = 0
         accumulatedY       = 0
         hasCommitted       = false
         currentFingerCount = fingerCount
         startLocation      = location
+        AppLogger.log("gesture began fingers=\(fingerCount)", subsystem: "gesture")
         SpatialTransitionEngine.shared.beginSession(window: window, fingerCount: fingerCount, at: location)
     }
 
-    func gestureDidDoubleTap(on window: AXUIElement) {}
+    public func gestureDidDoubleTap(on window: AXUIElement) {}
 
-    func gestureDidChange(deltaX: CGFloat, deltaY: CGFloat, velocity: CGFloat) {
+    public func gestureDidChange(deltaX: CGFloat, deltaY: CGFloat, velocity: CGFloat) {
         guard !hasCommitted else { return }
 
         accumulatedX += deltaX
@@ -49,12 +53,15 @@ class GestureEngine: TitleBarInterceptorDelegate {
             let absX = abs(accumulatedX), absY = abs(accumulatedY)
             if absX > lockThreshold && absX > absY * 1.5 {
                 axisLocked = .horizontal
+                AppLogger.log("gesture axis locked horizontal", subsystem: "gesture")
                 NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
             } else if absY > lockThreshold && absY > absX * 1.5 {
                 axisLocked = .vertical
+                AppLogger.log("gesture axis locked vertical", subsystem: "gesture")
                 NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
             } else if max(absX, absY) > cancelThreshold {
                 // Diagonal movement beyond ambiguity window — cancel
+                AppLogger.log("gesture cancelled due to diagonal ambiguity", subsystem: "gesture")
                 gestureDidCancel()
                 return
             }
@@ -73,27 +80,41 @@ class GestureEngine: TitleBarInterceptorDelegate {
         )
 
         if velocity > flickVelocity {
+            AppLogger.log("gesture commit via flick velocity", subsystem: "gesture")
             commit(effectiveX: effectiveX, effectiveY: effectiveY)
         }
     }
 
-    func gestureDidEnd() {
+    public func gestureDidEnd() {
+        if hasCommitted {
+            AppLogger.log("gesture ended after committed transition", subsystem: "gesture")
+            resetState()
+            return
+        }
         guard !hasCommitted, let lockedAxis = axisLocked else {
+            AppLogger.log("gesture ended without locked axis; cancelling", subsystem: "gesture")
             gestureDidCancel()
             return
         }
         let effectiveX = lockedAxis == .horizontal ? accumulatedX : 0
         let effectiveY = lockedAxis == .vertical   ? accumulatedY : 0
         if abs(effectiveX) > actionThreshold || abs(effectiveY) > actionThreshold {
+            AppLogger.log("gesture commit via distance threshold", subsystem: "gesture")
             commit(effectiveX: effectiveX, effectiveY: effectiveY)
         } else {
+            AppLogger.log("gesture ended below action threshold; cancelling", subsystem: "gesture")
             gestureDidCancel()
         }
     }
 
-    func gestureDidCancel() {
-        guard !hasCommitted else { return }
+    public func gestureDidCancel() {
+        guard !hasCommitted else {
+            AppLogger.log("gesture cancel received after commit; resetting", subsystem: "gesture")
+            resetState()
+            return
+        }
         hasCommitted = true
+        AppLogger.log("gesture cancelled", subsystem: "gesture")
         SpatialTransitionEngine.shared.cancelSession()
         resetState()
     }
@@ -102,6 +123,11 @@ class GestureEngine: TitleBarInterceptorDelegate {
 
     private func commit(effectiveX: CGFloat, effectiveY: CGFloat) {
         hasCommitted = true
+        let direction = GestureDirection(effectiveX: effectiveX, effectiveY: effectiveY)
+        AppLogger.log(
+            "gesture committed direction=\(direction.map { String(describing: $0) } ?? "none") fingers=\(currentFingerCount)",
+            subsystem: "gesture"
+        )
         NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
         SpatialTransitionEngine.shared.commitSession(
             effectiveX:  effectiveX,
@@ -109,7 +135,6 @@ class GestureEngine: TitleBarInterceptorDelegate {
             fingerCount: currentFingerCount,
             at:          startLocation
         )
-        resetState()
     }
 
     private func resetState() {
