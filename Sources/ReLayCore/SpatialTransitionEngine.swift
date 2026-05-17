@@ -27,7 +27,11 @@ public final class SpatialTransitionEngine {
     private var tiledEntries: [(window: AXUIElement, original: CGRect)] = []
     private var stageManagerWasEnabled: Bool = false
     private var isInTiledMode: Bool { !tiledEntries.isEmpty }
+    
+    private var lastExposeUndoFrames: [WindowID: CGRect]?
 
+    public var canUndo: Bool { lastExposeUndoFrames != nil }
+    
     private init() {
         AppLogger.log("spatial transition engine initialized", subsystem: "transition")
     }
@@ -97,8 +101,8 @@ public final class SpatialTransitionEngine {
                 executeStageManagerLayout(triggerWindow: window)
             }
         } else if fingerCount == 3 {
-            if let dir = direction, dir == .down, isNearScreenCenter(location) {
-                executeThreeColumnLayout(triggerWindow: window)
+            if let dir = direction, dir == .down {
+                executeLayoutExpose(triggerWindow: window)
             } else {
                 executeAutoLayout(triggerWindow: window)
             }
@@ -152,6 +156,32 @@ public final class SpatialTransitionEngine {
     }
 
     // MARK: - Multi-window Operations
+
+    private func executeLayoutExpose(triggerWindow: AXUIElement) {
+        AppLogger.log("transition request layout-expose", subsystem: "transition")
+        PreviewManager.shared.dismiss(animated: false)
+        LayoutExposeController.shared.present(triggerWindow: triggerWindow)
+    }
+    
+    func registerExposeUndo(frames: [AXUIElement: CGRect]) {
+        var undoMap: [WindowID: CGRect] = [:]
+        for (window, frame) in frames {
+            undoMap[WindowID(element: window)] = frame
+        }
+        lastExposeUndoFrames = undoMap
+    }
+
+    public func performExposeUndo() {
+        guard let frames = lastExposeUndoFrames else { 
+            AppLogger.log("undo requested but no frames stored", subsystem: "transition")
+            return 
+        }
+        AppLogger.log("performing undo for \(frames.count) windows", subsystem: "transition")
+        for (id, frame) in frames {
+            animator.animateWindowFrame(id.element, to: frame)
+        }
+        lastExposeUndoFrames = nil
+    }
 
     private func executeAutoLayout(triggerWindow: AXUIElement) {
         let screen = animator.getUsableScreenFrame(for: triggerWindow)

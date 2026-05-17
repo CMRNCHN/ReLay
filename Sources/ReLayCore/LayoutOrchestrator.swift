@@ -66,6 +66,28 @@ class LayoutOrchestrator {
         return result
     }
 
+    func windowTitle(for window: AXUIElement) -> String {
+        var titleRef: CFTypeRef?
+        if AXUIElementCopyAttributeValue(window, kAXTitleAttribute as CFString, &titleRef) == .success,
+           let title = titleRef as? String,
+           !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return title
+        }
+
+        var appRef: CFTypeRef?
+        if AXUIElementCopyAttributeValue(window, kAXParentAttribute as CFString, &appRef) == .success,
+           let app = appRef {
+            var appTitleRef: CFTypeRef?
+            if AXUIElementCopyAttributeValue(app as! AXUIElement, kAXTitleAttribute as CFString, &appTitleRef) == .success,
+               let appTitle = appTitleRef as? String,
+               !appTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return appTitle
+            }
+        }
+
+        return "Window"
+    }
+
     // MARK: - Stage Manager
 
     func isStageManagerEnabled() -> Bool {

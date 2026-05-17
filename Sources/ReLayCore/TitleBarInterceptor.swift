@@ -123,7 +123,9 @@ public final class TitleBarInterceptor {
     /// Starts intercepting global mouse events
     public func start() throws {
         AppLogger.log("starting event tap setup", subsystem: "interceptor")
-        let eventMask = (1 << CGEventType.scrollWheel.rawValue) | (1 << CGEventType.leftMouseDown.rawValue)
+        let eventMask = (1 << CGEventType.scrollWheel.rawValue) | 
+                         (1 << CGEventType.leftMouseDown.rawValue) |
+                         (1 << CGEventType.keyDown.rawValue)
         
         let observer = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
         
@@ -180,6 +182,22 @@ public final class TitleBarInterceptor {
         resetState()
     }
     
+    
+    private func getFrontmostWindow() -> AXUIElement? {
+        guard let frontmostApp = NSWorkspace.shared.frontmostApplication else { return nil }
+        let axApp = AXUIElementCreateApplication(frontmostApp.processIdentifier)
+        var ref: CFTypeRef?
+        if AXUIElementCopyAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, &ref) == .success {
+            return (ref as! AXUIElement)
+        }
+        // Fallback to the first window in the windows list
+        if AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &ref) == .success,
+           let list = ref as? [AXUIElement], !list.isEmpty {
+            return list[0]
+        }
+        return nil
+    }
+
     /// Main callback handler for intercepted events
     private func handleEvent(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         // Re-enable event tap if the system disabled it due to timeout or user input.
@@ -188,6 +206,22 @@ public final class TitleBarInterceptor {
                 CGEvent.tapEnable(tap: tap, enable: true)
             }
             AppLogger.log("event tap re-enabled after system disable", subsystem: "interceptor")
+            return Unmanaged.passUnretained(event)
+        }
+
+        // Handle Global Shortcut (Control + Option + Space)
+        if type == .keyDown {
+            if let nsEvent = NSEvent(cgEvent: event) {
+                let modifiers = nsEvent.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                if modifiers == [.control, .option] && nsEvent.keyCode == 49 {
+                    if let frontmost = getFrontmostWindow() {
+                        DispatchQueue.main.async {
+                            LayoutExposeController.shared.present(triggerWindow: frontmost)
+                        }
+                        return nil // Swallow
+                    }
+                }
+            }
             return Unmanaged.passUnretained(event)
         }
 
@@ -474,14 +508,14 @@ public final class TitleBarInterceptor {
         }
 
         if signals.hasContentOwnership {
-            return .semanticMiss("content-ownership ancestry=\(signals.ancestryRoles.joined(separator: \">\"))".replacingOccurrences(of: "\\>", with: ">"))
+            return .semanticMiss("content-ownership ancestry=\(signals.ancestryRoles.joined(separator: ">"))")
         }
 
         if signals.allowsNormalizedTopBandOwnership {
             return .accepted("normalized-\(signals.variant)")
         }
 
-        return .semanticMiss("ambiguous-ownership ancestry=\(signals.ancestryRoles.joined(separator: \">\"))".replacingOccurrences(of: "\\>", with: ">"))
+        return .semanticMiss("ambiguous-ownership ancestry=\(signals.ancestryRoles.joined(separator: ">"))")
     }
 
     private func chromeSignals(for element: AXUIElement, window: AXUIElement) -> ChromeSignals {
