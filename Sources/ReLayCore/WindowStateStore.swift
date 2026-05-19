@@ -57,26 +57,38 @@ public final class WindowStateStore {
         return records[WindowID(element: window)]
     }
 
-    func setRecord(_ record: WindowRecord, for window: AXUIElement) {
+    func setRecord(_ record: WindowRecord, for window: AXUIElement, sessionID: String? = nil) {
         let id = WindowID(element: window)
         let previousState = records[id]?.currentState
         records[id] = record
 
         if let previousState {
             if previousState != record.currentState {
-                AppLogger.log("state transition \(previousState) -> \(record.currentState)", subsystem: "state")
+                if let sessionID = sessionID {
+                    AppLogger.log("state transition \(previousState) -> \(record.currentState)", sessionID: sessionID, subsystem: "state")
+                } else {
+                    AppLogger.log("state transition \(previousState) -> \(record.currentState)", subsystem: "state")
+                }
             }
         } else {
-            AppLogger.log("created state record state=\(record.currentState)", subsystem: "state")
+            if let sessionID = sessionID {
+                AppLogger.log("created state record state=\(record.currentState)", sessionID: sessionID, subsystem: "state")
+            } else {
+                AppLogger.log("created state record state=\(record.currentState)", subsystem: "state")
+            }
         }
     }
 
-    func updateState(_ state: WindowLayoutState, for window: AXUIElement) {
+    func updateState(_ state: WindowLayoutState, for window: AXUIElement, sessionID: String? = nil) {
         if var record = records[WindowID(element: window)] {
             let previousState = record.currentState
             record.transition(to: state)
             records[WindowID(element: window)] = record
-            AppLogger.log("state transition \(previousState) -> \(state)", subsystem: "state")
+            if let sessionID = sessionID {
+                AppLogger.log("state transition \(previousState) -> \(state)", sessionID: sessionID, subsystem: "state")
+            } else {
+                AppLogger.log("state transition \(previousState) -> \(state)", subsystem: "state")
+            }
         }
     }
 
