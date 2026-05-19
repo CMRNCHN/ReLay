@@ -16,7 +16,7 @@ class LayoutOrchestrator {
 
     /// Tiles `windows` inside `screen`. `columns` fixes the column count;
     /// nil computes a square-ish grid automatically.
-    func tileWindows(_ windows: [AXUIElement], in screen: CGRect, columns: Int? = nil, gap: CGFloat = 2) {
+    func tileWindows(_ windows: [AXUIElement], in screen: CGRect, columns: Int? = nil, gap: CGFloat = 2, sessionID: String? = nil) {
         let count = windows.count
         guard count > 0 else { return }
 
@@ -170,7 +170,7 @@ class LayoutOrchestrator {
 
     // MARK: - Spring Animation
 
-    func animateWindowFrame(_ window: AXUIElement, to target: CGRect, duration: TimeInterval = 0.220) {
+    func animateWindowFrame(_ window: AXUIElement, to target: CGRect, duration: TimeInterval = 0.220, sessionID: String? = nil) {
         let id = WindowID(element: window)
         activeAnimations[id]?.invalidate()
 

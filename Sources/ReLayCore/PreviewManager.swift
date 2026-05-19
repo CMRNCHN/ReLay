@@ -47,7 +47,7 @@ class PreviewManager {
         return window
     }
     
-    func updateOverlay(currentFrame: CGRect, targetFrame: CGRect, progress: CGFloat) {
+    func updateOverlay(currentFrame: CGRect, targetFrame: CGRect, progress: CGFloat, sessionID: String) {
         guard let window = previewWindow, let targetWin = targetWindow else { return }
         
         let currentFlipped = flipToBottomUp(currentFrame)
@@ -96,7 +96,7 @@ class PreviewManager {
         }
     }
     
-    func commitOverlay(finalFrame: CGRect) {
+    func commitOverlay(finalFrame: CGRect, sessionID: String) {
         guard let window = previewWindow, window.isVisible else { return }
         
         let targetFlipped = flipToBottomUp(finalFrame)
@@ -117,7 +117,7 @@ class PreviewManager {
         }
     }
     
-    func dismiss(animated: Bool) {
+    func dismiss(animated: Bool, sessionID: String) {
         let windows = [previewWindow, targetWindow].compactMap { $0 }
         
         for window in windows {

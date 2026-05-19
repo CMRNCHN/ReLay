@@ -44,7 +44,7 @@ public final class LayoutExposeController: NSWindowController {
         fatalError("init(coder:) has not been implemented")
     }
 
-    public func present(triggerWindow: AXUIElement) {
+    public func present(triggerWindow: AXUIElement, sessionID: String) {
         self.triggerWindow = triggerWindow
         self.screenFrame = orchestrator.getUsableScreenFrame(for: triggerWindow)
         self.currentWindows = makeWindowItems()
