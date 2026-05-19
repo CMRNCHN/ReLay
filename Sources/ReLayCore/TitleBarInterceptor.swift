@@ -9,6 +9,7 @@ public protocol TitleBarInterceptorDelegate: AnyObject {
     func gestureDidEnd()
     func gestureDidCancel()
     func gestureDidDoubleTap(on window: AXUIElement)
+    func killSwitchTriggered()
 }
 
 public final class TitleBarInterceptor {
@@ -67,12 +68,12 @@ public final class TitleBarInterceptor {
 
         var topBandHeight: CGFloat {
             if hasTabGroup {
-                return 112.0
+                return 44.0 // Tabs are usually narrow
             }
             if hasToolbar {
-                return 96.0
+                return 80.0 // Toolbar + Title
             }
-            return 84.0
+            return 40.0 // Standard title bar
         }
 
         private static let chromeRoles: Set<String> = [
@@ -200,6 +201,10 @@ public final class TitleBarInterceptor {
 
     /// Main callback handler for intercepted events
     private func handleEvent(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        // CGEvent.location is in screen coordinates (top-left is 0,0). 
+        // We use it directly for AXUIElementCopyElementAtPosition which expects the same.
+        // let location = event.location
+        // AppLogger.log("interceptor event location=\(Int(location.x)),\(Int(location.y))", subsystem: "interceptor")
         // Re-enable event tap if the system disabled it due to timeout or user input.
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let tap = eventTap {
@@ -221,6 +226,13 @@ public final class TitleBarInterceptor {
                         return nil // Swallow
                     }
                 }
+
+                // Emergency Kill Switch (Cmd + Shift + Escape)
+                if modifiers == [.command, .shift] && nsEvent.keyCode == 53 {
+                    AppLogger.log("emergency kill-switch triggered via keyboard", subsystem: "interceptor")
+                    delegate?.killSwitchTriggered()
+                    return nil // Swallow to prevent system seeing it
+                }
             }
             return Unmanaged.passUnretained(event)
         }
@@ -228,7 +240,7 @@ public final class TitleBarInterceptor {
         // Handle Double Tap (Left Mouse Down with clickCount == 2)
         if type == .leftMouseDown {
             if let nsEvent = NSEvent(cgEvent: event), nsEvent.clickCount == 2 {
-                let location = event.unflippedLocation
+                let location = event.location
                 if let window = hitTestTitleBar(at: location) {
                     delegate?.gestureDidDoubleTap(on: window)
                     return nil // Swallow the double click to override macOS default behavior
@@ -247,7 +259,7 @@ public final class TitleBarInterceptor {
         // Phase: Began (Start of a physical gesture)
         if phase == .began {
             AppLogger.log("scroll phase began", subsystem: "interceptor")
-            let location = event.unflippedLocation
+            let location = event.location
             
             if let window = hitTestTitleBar(at: location) {
                 isTrackingGesture = true
@@ -497,25 +509,32 @@ public final class TitleBarInterceptor {
             return .semanticMiss("window-frame-unavailable")
         }
 
-        let titleBarMinY = frame.origin.y + frame.size.height - signals.topBandHeight
-        let titleBarMaxY = frame.origin.y + frame.size.height
-        let isWithinTopBand = point.y >= titleBarMinY && point.y <= titleBarMaxY
+        let titleBarMinY = frame.origin.y
+        let titleBarMaxY = frame.origin.y + signals.topBandHeight
+        
+        // Use a consistent coordinate system (screen coordinates).
+        // AXUIElementCopyElementAtPosition and kAXPositionAttribute both use top-left as origin.
+        let hitBuffer: CGFloat = 8.0
+        let isWithinTopBand = point.y >= (titleBarMinY - hitBuffer) && point.y <= (titleBarMaxY + hitBuffer)
 
         guard isWithinTopBand else {
+            AppLogger.log("geometric miss: pointY=\(Int(point.y)) band=\(Int(titleBarMinY))..\(Int(titleBarMaxY)) windowY=\(Int(frame.origin.y))", subsystem: "interceptor")
             return .geometricMiss(
                 "pointY=\(Int(point.y)) titleBarMinY=\(Int(titleBarMinY)) titleBarMaxY=\(Int(titleBarMaxY)) windowY=\(Int(frame.origin.y)) windowHeight=\(Int(frame.size.height))"
             )
         }
 
+        let ancestry = signals.ancestryRoles.joined(separator: ">")
         if signals.hasContentOwnership {
-            return .semanticMiss("content-ownership ancestry=\(signals.ancestryRoles.joined(separator: ">"))")
+            AppLogger.log("semantic miss: content-ownership at point (role: \(signals.hitRole))", subsystem: "interceptor")
+            return .semanticMiss("content-ownership ancestry=\(ancestry)")
         }
 
         if signals.allowsNormalizedTopBandOwnership {
             return .accepted("normalized-\(signals.variant)")
         }
 
-        return .semanticMiss("ambiguous-ownership ancestry=\(signals.ancestryRoles.joined(separator: ">"))")
+        return .semanticMiss("ambiguous-ownership ancestry=\(ancestry)")
     }
 
     private func chromeSignals(for element: AXUIElement, window: AXUIElement) -> ChromeSignals {

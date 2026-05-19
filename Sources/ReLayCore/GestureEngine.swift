@@ -8,15 +8,21 @@ enum GestureAxis { case horizontal, vertical }
 
 public final class GestureEngine: TitleBarInterceptorDelegate {
     public init() {
+        reloadThresholds()
         AppLogger.log("gesture engine initialized", subsystem: "gesture")
+        NotificationCenter.default.addObserver(forName: NSNotification.Name("ReLaySettingsChanged"), object: nil, queue: .main) { [weak self] _ in
+            self?.reloadThresholds()
+        }
     }
 
-    // MARK: - Thresholds
+    private var thresholds: [String: CGFloat] = [:]
 
-    private let lockThreshold:   CGFloat = 20.0
-    private let cancelThreshold: CGFloat = 25.0
-    private let actionThreshold: CGFloat = 100.0
-    private let flickVelocity:   CGFloat = 800.0
+    private func reloadThresholds() {
+        thresholds["lockThreshold"] = CGFloat(UserDefaults.standard.double(forKey: "lockThreshold") != 0 ? UserDefaults.standard.double(forKey: "lockThreshold") : 20.0)
+        thresholds["cancelThreshold"] = CGFloat(UserDefaults.standard.double(forKey: "cancelThreshold") != 0 ? UserDefaults.standard.double(forKey: "cancelThreshold") : 25.0)
+        thresholds["actionThreshold"] = CGFloat(UserDefaults.standard.double(forKey: "actionThreshold") != 0 ? UserDefaults.standard.double(forKey: "actionThreshold") : 100.0)
+        thresholds["flickVelocity"] = CGFloat(UserDefaults.standard.double(forKey: "flickVelocity") != 0 ? UserDefaults.standard.double(forKey: "flickVelocity") : 800.0)
+    }
 
     // MARK: - Session State
 
@@ -42,6 +48,11 @@ public final class GestureEngine: TitleBarInterceptorDelegate {
 
     public func gestureDidDoubleTap(on window: AXUIElement) {}
 
+    public func killSwitchTriggered() {
+        gestureDidCancel()
+        NotificationCenter.default.post(name: NSNotification.Name("ReLayEmergencyStop"), object: nil)
+    }
+
     public func gestureDidChange(deltaX: CGFloat, deltaY: CGFloat, velocity: CGFloat) {
         guard !hasCommitted else { return }
 
@@ -51,15 +62,15 @@ public final class GestureEngine: TitleBarInterceptorDelegate {
         // Axis locking: one axis must dominate the other by 1.5× before we commit direction
         if axisLocked == nil {
             let absX = abs(accumulatedX), absY = abs(accumulatedY)
-            if absX > lockThreshold && absX > absY * 1.5 {
+            if absX > (thresholds["lockThreshold"] ?? 20.0) && absX > absY * 1.5 {
                 axisLocked = .horizontal
                 AppLogger.log("gesture axis locked horizontal", subsystem: "gesture")
                 NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
-            } else if absY > lockThreshold && absY > absX * 1.5 {
+            } else if absY > (thresholds["lockThreshold"] ?? 20.0) && absY > absX * 1.5 {
                 axisLocked = .vertical
                 AppLogger.log("gesture axis locked vertical", subsystem: "gesture")
                 NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
-            } else if max(absX, absY) > cancelThreshold {
+            } else if max(absX, absY) > (thresholds["cancelThreshold"] ?? 25.0) {
                 // Diagonal movement beyond ambiguity window — cancel
                 AppLogger.log("gesture cancelled due to diagonal ambiguity", subsystem: "gesture")
                 gestureDidCancel()
@@ -71,7 +82,9 @@ public final class GestureEngine: TitleBarInterceptorDelegate {
         let effectiveX = axisLocked == .horizontal ? accumulatedX : 0
         let effectiveY = axisLocked == .vertical   ? accumulatedY : 0
         let distance   = max(abs(effectiveX), abs(effectiveY))
-        let progress   = min(1.0, max(0.0, (distance - lockThreshold) / (actionThreshold - lockThreshold)))
+        let lockVal    = thresholds["lockThreshold"] ?? 20.0
+        let actionVal  = thresholds["actionThreshold"] ?? 100.0
+        let progress   = min(1.0, max(0.0, (distance - lockVal) / (actionVal - lockVal)))
 
         SpatialTransitionEngine.shared.updatePreview(
             effectiveX: effectiveX,
@@ -79,7 +92,7 @@ public final class GestureEngine: TitleBarInterceptorDelegate {
             progress:   progress
         )
 
-        if velocity > flickVelocity {
+        if velocity > (thresholds["flickVelocity"] ?? 800.0) {
             AppLogger.log("gesture commit via flick velocity", subsystem: "gesture")
             commit(effectiveX: effectiveX, effectiveY: effectiveY)
         }
@@ -98,7 +111,8 @@ public final class GestureEngine: TitleBarInterceptorDelegate {
         }
         let effectiveX = lockedAxis == .horizontal ? accumulatedX : 0
         let effectiveY = lockedAxis == .vertical   ? accumulatedY : 0
-        if abs(effectiveX) > actionThreshold || abs(effectiveY) > actionThreshold {
+        let actionVal  = thresholds["actionThreshold"] ?? 100.0
+        if abs(effectiveX) > actionVal || abs(effectiveY) > actionVal {
             AppLogger.log("gesture commit via distance threshold", subsystem: "gesture")
             commit(effectiveX: effectiveX, effectiveY: effectiveY)
         } else {

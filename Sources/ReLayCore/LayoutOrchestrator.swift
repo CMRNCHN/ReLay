@@ -115,17 +115,29 @@ class LayoutOrchestrator {
 
     // MARK: - Screen Frame
 
-    func getUsableScreenFrame(for window: AXUIElement) -> CGRect {
+    func getUsableScreenFrame(for window: AXUIElement, at point: CGPoint? = nil) -> CGRect {
         guard let primary = NSScreen.screens.first else { return .zero }
         var target = NSScreen.main ?? primary
 
-        if let frame = getWindowFrame(window) {
-            let center = CGPoint(x: frame.midX, y: frame.midY)
+        if let point = point {
             for screen in NSScreen.screens {
                 let axY = primary.frame.height - (screen.frame.origin.y + screen.frame.height)
                 let axFrame = CGRect(x: screen.frame.origin.x, y: axY,
                                      width: screen.frame.width, height: screen.frame.height)
-                if axFrame.contains(center) { target = screen; break }
+                if axFrame.contains(point) { target = screen; break }
+            }
+        } else if let frame = getWindowFrame(window) {
+            var maxArea: CGFloat = -1
+            for screen in NSScreen.screens {
+                let axY = primary.frame.height - (screen.frame.origin.y + screen.frame.height)
+                let axFrame = CGRect(x: screen.frame.origin.x, y: axY,
+                                     width: screen.frame.width, height: screen.frame.height)
+                let intersection = axFrame.intersection(frame)
+                let area = intersection.width * intersection.height
+                if area > maxArea {
+                    maxArea = area
+                    target = screen
+                }
             }
         }
 

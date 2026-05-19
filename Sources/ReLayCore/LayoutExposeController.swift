@@ -367,7 +367,12 @@ public final class LayoutExposeController: NSWindowController {
     }
 
     @objc private func applyPressed() {
-        guard let selectedTemplate else { return }
+        AppLogger.log("Layout Expose: Apply pressed", subsystem: "expose")
+        guard let selectedTemplate else {
+            AppLogger.log("Layout Expose: Apply failed - no template selected", subsystem: "expose")
+            return 
+        }
+        AppLogger.log("Layout Expose: Applying template \(selectedTemplate.name) with \(assignments.count) assignments", subsystem: "expose")
 
         // Record usage for suggestions
         let event = AppliedLayoutEvent(
@@ -391,9 +396,13 @@ public final class LayoutExposeController: NSWindowController {
         SpatialTransitionEngine.shared.registerExposeUndo(frames: originalFrames)
 
         for slot in selectedTemplate.slots {
-            guard let item = assignments[slot.id] else { continue }
-            let targetFrame = selectedTemplate.frame(for: slot, in: screenFrame)
-            orchestrator.animateWindowFrame(item.element, to: targetFrame)
+            if let item = assignments[slot.id] {
+                let targetFrame = selectedTemplate.frame(for: slot, in: screenFrame)
+                AppLogger.log("Layout Expose: Animating \(item.title) to \(targetFrame)", subsystem: "expose")
+                orchestrator.animateWindowFrame(item.element, to: targetFrame)
+            } else {
+                AppLogger.log("Layout Expose: No assignment for slot \(slot.id)", subsystem: "expose")
+            }
         }
 
         renderAppliedConfirmationPage()

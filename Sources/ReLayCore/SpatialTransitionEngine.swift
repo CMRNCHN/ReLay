@@ -21,6 +21,7 @@ public final class SpatialTransitionEngine {
     private var sessionStartFrame:    CGRect = .zero
     private var sessionFingerCount:   Int    = 2
     private var sessionStartLocation: CGPoint = .zero
+    private var sessionScreenFrame:   CGRect = .zero
 
     // MARK: - Multi-window Layout State
 
@@ -44,11 +45,11 @@ public final class SpatialTransitionEngine {
         sessionFingerCount   = fingerCount
         sessionStartLocation = location
         sessionStartFrame    = animator.getWindowFrame(window) ?? .zero
+        sessionScreenFrame   = animator.getUsableScreenFrame(for: window, at: location)
 
         // Bootstrap the state store if this window hasn't been seen before.
         if store.record(for: window) == nil {
-            let screen   = animator.getUsableScreenFrame(for: window)
-            let inferred = resolver.inferState(from: sessionStartFrame, on: screen)
+            let inferred = resolver.inferState(from: sessionStartFrame, on: sessionScreenFrame)
             AppLogger.log("bootstrapped window state=\(inferred)", subsystem: "transition")
             let record   = WindowRecord(
                 currentState: inferred,
@@ -74,8 +75,7 @@ public final class SpatialTransitionEngine {
             return
         }
 
-        let screen      = animator.getUsableScreenFrame(for: window)
-        let targetFrame = targetFrame(for: nextState, window: window, screen: screen)
+        let targetFrame = targetFrame(for: nextState, window: window, screen: sessionScreenFrame)
         PreviewManager.shared.updateOverlay(
             currentFrame: sessionStartFrame,
             targetFrame:  targetFrame,
@@ -147,9 +147,8 @@ public final class SpatialTransitionEngine {
         record.transition(to: nextState)
         store.setRecord(record, for: window)
 
-        let screen      = animator.getUsableScreenFrame(for: window)
         AppLogger.log("layout resolution request state=\(nextState)", subsystem: "transition")
-        let targetFrame = targetFrame(for: nextState, window: window, screen: screen)
+        let targetFrame = targetFrame(for: nextState, window: window, screen: sessionScreenFrame)
 
         PreviewManager.shared.commitOverlay(finalFrame: targetFrame)
         animator.animateWindowFrame(window, to: targetFrame)
@@ -184,7 +183,7 @@ public final class SpatialTransitionEngine {
     }
 
     private func executeAutoLayout(triggerWindow: AXUIElement) {
-        let screen = animator.getUsableScreenFrame(for: triggerWindow)
+        let screen = sessionScreenFrame != .zero ? sessionScreenFrame : animator.getUsableScreenFrame(for: triggerWindow)
         AppLogger.log("layout resolution request state=fullscreen auto-layout", subsystem: "transition")
         let target = resolver.frame(for: .fullscreen, on: screen)
 
@@ -200,7 +199,7 @@ public final class SpatialTransitionEngine {
 
     private func executeThreeColumnLayout(triggerWindow: AXUIElement) {
         AppLogger.log("transition request three-column layout", subsystem: "transition")
-        let screen  = animator.getUsableScreenFrame(for: triggerWindow)
+        let screen = sessionScreenFrame != .zero ? sessionScreenFrame : animator.getUsableScreenFrame(for: triggerWindow)
         var windows = animator.getAllVisibleWindows()
         guard windows.count >= 3 else { executeAutoLayout(triggerWindow: triggerWindow); return }
 
@@ -222,7 +221,7 @@ public final class SpatialTransitionEngine {
 
     private func executeStageManagerLayout(triggerWindow: AXUIElement) {
         AppLogger.log("transition request stage-manager layout", subsystem: "transition")
-        let screen  = animator.getUsableScreenFrame(for: triggerWindow)
+        let screen = sessionScreenFrame != .zero ? sessionScreenFrame : animator.getUsableScreenFrame(for: triggerWindow)
         let windows = animator.getAllVisibleWindows()
         guard !windows.isEmpty else { return }
 
