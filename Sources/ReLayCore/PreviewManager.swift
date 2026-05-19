@@ -36,9 +36,9 @@ class PreviewManager {
         self.previewWindow = window
     }
     
-    func updateOverlay(currentFrame: CGRect, targetFrame: CGRect, progress: CGFloat) {
+    func updateOverlay(currentFrame: CGRect, targetFrame: CGRect, progress: CGFloat, sessionID: String) {
         guard let window = previewWindow else { return }
-        
+
         let currentFlipped = flipToBottomUp(currentFrame)
         let targetFlipped = flipToBottomUp(targetFrame)
         
@@ -66,9 +66,9 @@ class PreviewManager {
         }
     }
     
-    func commitOverlay(finalFrame: CGRect) {
+    func commitOverlay(finalFrame: CGRect, sessionID: String) {
         guard let window = previewWindow, window.isVisible else { return }
-        
+
         let targetFlipped = flipToBottomUp(finalFrame)
         
         // Snap exactly to frame, then fade out after layout engine takes over
@@ -83,9 +83,9 @@ class PreviewManager {
         }
     }
     
-    func dismiss(animated: Bool) {
+    func dismiss(animated: Bool, sessionID: String) {
         guard let window = previewWindow, window.isVisible else { return }
-        
+
         if animated {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.120 // Spec: "fades out over 120ms simultaneously"
