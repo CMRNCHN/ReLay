@@ -5,6 +5,8 @@ import ReLayCore
 AppLogger.log("bootstrapping runtime", subsystem: "startup")
 CrashLogger.setup()
 
+var appDelegate: AppDelegate?
+
 // Single instance enforcement
 let bundleIdentifier = Bundle.main.bundleIdentifier ?? "com.relay.app"
 let runningApps = NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier == bundleIdentifier }
@@ -29,6 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         setupMenuBar()
         titleBarInterceptor.delegate = gestureEngine
+        setupSignalHandling()
 
         checkAccessibilityAndStart()
         checkConflicts()
@@ -66,6 +69,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             alert.informativeText = "ReLay detected other window managers running: \(conflicts.joined(separator: ", ")).\n\nHaving multiple window managers active may lead to unpredictable gesture behavior or shortcut conflicts."
             alert.addButton(withTitle: "OK")
             alert.runModal()
+        }
+    }
+
+    private func setupSignalHandling() {
+        CLISignalWrapper.setupSignalHandling {
+            AppLogger.log("signal handler: stopping interceptor", subsystem: "signal-handler")
+            self.titleBarInterceptor.stop()
+            NSApplication.shared.terminate(nil)
         }
     }
 
@@ -169,9 +180,9 @@ extension AppDelegate: NSMenuDelegate {
 }
 
 let app = NSApplication.shared
-let delegate = AppDelegate()
+appDelegate = AppDelegate()
 
-app.delegate = delegate
+app.delegate = appDelegate
 app.setActivationPolicy(.accessory)
 
 AppLogger.log("starting application loop", subsystem: "startup")
