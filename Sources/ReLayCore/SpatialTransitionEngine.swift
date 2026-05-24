@@ -108,7 +108,14 @@ public final class SpatialTransitionEngine {
             }
         } else {
             guard let dir = direction else { cancelSession(); return }
-            executeStateTransition(direction: dir, for: window)
+            switch dir {
+            case .up:
+                executeEnlarge(window: window)
+            case .down:
+                executeMinimize(window: window)
+            case .left, .right:
+                executeStateTransition(direction: dir, for: window)
+            }
         }
     }
 
@@ -119,6 +126,33 @@ public final class SpatialTransitionEngine {
             PreviewManager.shared.dismiss(animated: true)
             return
         }
+        animator.animateWindowFrame(window, to: sessionStartFrame, duration: 0.120)
+        PreviewManager.shared.dismiss(animated: true)
+    }
+
+    // MARK: - Shift Live Resize
+
+    /// Called on every scroll delta while shift is held. Resizes the window height
+    /// in place (top-left anchored) with no snap — smooth like a scroll.
+    func applyResizeDelta(deltaY: CGFloat) {
+        guard let window = sessionWindow,
+              var frame = animator.getWindowFrame(window) else { return }
+        let scale: CGFloat = 2.0
+        let newHeight = max(150, frame.size.height + deltaY * scale)
+        frame.size.height = newHeight
+        animator.setWindowFrame(window, frame: frame)
+    }
+
+    func endResizeSession() {
+        AppLogger.log("shift resize session ended", subsystem: "transition")
+        PreviewManager.shared.dismiss(animated: false)
+        clearSession()
+    }
+
+    func cancelResizeSession() {
+        defer { clearSession() }
+        AppLogger.log("shift resize session cancelled; restoring frame", subsystem: "transition")
+        guard let window = sessionWindow, !sessionStartFrame.isEmpty else { return }
         animator.animateWindowFrame(window, to: sessionStartFrame, duration: 0.120)
         PreviewManager.shared.dismiss(animated: true)
     }
@@ -152,6 +186,31 @@ public final class SpatialTransitionEngine {
 
         PreviewManager.shared.commitOverlay(finalFrame: targetFrame)
         animator.animateWindowFrame(window, to: targetFrame)
+    }
+
+    // MARK: - 2-finger Vertical Actions
+
+    private func executeEnlarge(window: AXUIElement) {
+        AppLogger.log("transition request enlarge", subsystem: "transition")
+        let screen = sessionScreenFrame != .zero ? sessionScreenFrame : animator.getUsableScreenFrame(for: window)
+        let target = resolver.frame(for: .fullscreen, on: screen)
+
+        if var record = store.record(for: window) {
+            if record.floatingFrame == nil { record.floatingFrame = sessionStartFrame }
+            record.transition(to: .fullscreen)
+            store.setRecord(record, for: window)
+        }
+
+        NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
+        PreviewManager.shared.commitOverlay(finalFrame: target)
+        animator.animateWindowFrame(window, to: target)
+    }
+
+    private func executeMinimize(window: AXUIElement) {
+        AppLogger.log("transition request minimize window", subsystem: "transition")
+        NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
+        PreviewManager.shared.dismiss(animated: false)
+        AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanTrue)
     }
 
     // MARK: - Multi-window Operations

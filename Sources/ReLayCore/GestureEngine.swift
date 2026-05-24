@@ -32,17 +32,19 @@ public final class GestureEngine: TitleBarInterceptorDelegate {
     private var hasCommitted:      Bool    = false
     private var currentFingerCount: Int    = 2
     private var startLocation:     CGPoint = .zero
+    private var isShiftMode:       Bool    = false
 
     // MARK: - TitleBarInterceptorDelegate
 
-    public func gestureDidBegin(on window: AXUIElement, at location: CGPoint, fingerCount: Int) {
+    public func gestureDidBegin(on window: AXUIElement, at location: CGPoint, fingerCount: Int, shiftHeld: Bool) {
         axisLocked         = nil
         accumulatedX       = 0
         accumulatedY       = 0
         hasCommitted       = false
         currentFingerCount = fingerCount
         startLocation      = location
-        AppLogger.log("gesture began fingers=\(fingerCount)", subsystem: "gesture")
+        isShiftMode        = shiftHeld && fingerCount == 2
+        AppLogger.log("gesture began fingers=\(fingerCount) shiftMode=\(isShiftMode)", subsystem: "gesture")
         SpatialTransitionEngine.shared.beginSession(window: window, fingerCount: fingerCount, at: location)
     }
 
@@ -54,6 +56,10 @@ public final class GestureEngine: TitleBarInterceptorDelegate {
     }
 
     public func gestureDidChange(deltaX: CGFloat, deltaY: CGFloat, velocity: CGFloat) {
+        if isShiftMode {
+            SpatialTransitionEngine.shared.applyResizeDelta(deltaY: deltaY)
+            return
+        }
         guard !hasCommitted else { return }
 
         accumulatedX += deltaX
@@ -99,6 +105,12 @@ public final class GestureEngine: TitleBarInterceptorDelegate {
     }
 
     public func gestureDidEnd() {
+        if isShiftMode {
+            AppLogger.log("shift resize session ended", subsystem: "gesture")
+            SpatialTransitionEngine.shared.endResizeSession()
+            resetState()
+            return
+        }
         if hasCommitted {
             AppLogger.log("gesture ended after committed transition", subsystem: "gesture")
             resetState()
@@ -122,6 +134,12 @@ public final class GestureEngine: TitleBarInterceptorDelegate {
     }
 
     public func gestureDidCancel() {
+        if isShiftMode {
+            AppLogger.log("shift resize session cancelled", subsystem: "gesture")
+            SpatialTransitionEngine.shared.cancelResizeSession()
+            resetState()
+            return
+        }
         guard !hasCommitted else {
             AppLogger.log("gesture cancel received after commit; resetting", subsystem: "gesture")
             resetState()
@@ -158,5 +176,6 @@ public final class GestureEngine: TitleBarInterceptorDelegate {
         hasCommitted       = false
         currentFingerCount = 2
         startLocation      = .zero
+        isShiftMode        = false
     }
 }

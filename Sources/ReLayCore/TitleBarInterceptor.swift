@@ -4,7 +4,7 @@ import Accessibility
 
 /// Delegate protocol to pass clean gesture lifecycle events to the Gesture Engine.
 public protocol TitleBarInterceptorDelegate: AnyObject {
-    func gestureDidBegin(on window: AXUIElement, at location: CGPoint, fingerCount: Int)
+    func gestureDidBegin(on window: AXUIElement, at location: CGPoint, fingerCount: Int, shiftHeld: Bool)
     func gestureDidChange(deltaX: CGFloat, deltaY: CGFloat, velocity: CGFloat)
     func gestureDidEnd()
     func gestureDidCancel()
@@ -48,8 +48,11 @@ public final class TitleBarInterceptor {
         }
 
         var variant: String {
+            if hasTabGroup && hasToolbar {
+                return "tabbed-toolbar"   // Safari, Chrome, Xcode — combined tab strip + nav bar
+            }
             if hasTabGroup {
-                return "tabbed"
+                return "tabbed"           // Terminal, plain tab bars
             }
             if hasToolbar && windowChildRoles.contains("AXGroup") {
                 return "blended-toolbar"
@@ -67,13 +70,16 @@ public final class TitleBarInterceptor {
         }
 
         var topBandHeight: CGFloat {
+            if hasTabGroup && hasToolbar {
+                return 80.0 // combined tab strip + navigation toolbar (Safari, Chrome, Xcode)
+            }
             if hasTabGroup {
-                return 44.0 // Tabs are usually narrow
+                return 44.0 // tab strip only (Terminal)
             }
             if hasToolbar {
-                return 80.0 // Toolbar + Title
+                return 80.0 // toolbar + title (Finder)
             }
-            return 40.0 // Standard title bar
+            return 40.0 // standard title bar (TextEdit, Settings)
         }
 
         private static let chromeRoles: Set<String> = [
@@ -264,8 +270,9 @@ public final class TitleBarInterceptor {
             if let window = hitTestTitleBar(at: location) {
                 isTrackingGesture = true
                 activeTargetWindow = window
-                AppLogger.log("title bar hit; beginning gesture tracking fingers=\(lastKnownTouchCount)", subsystem: "interceptor")
-                delegate?.gestureDidBegin(on: window, at: location, fingerCount: lastKnownTouchCount)
+                let shiftHeld = NSEvent.modifierFlags.contains(.shift)
+                AppLogger.log("title bar hit; beginning gesture tracking fingers=\(lastKnownTouchCount) shift=\(shiftHeld)", subsystem: "interceptor")
+                delegate?.gestureDidBegin(on: window, at: location, fingerCount: lastKnownTouchCount, shiftHeld: shiftHeld)
                 
                 // Swallow the event to prevent underlying scroll
                 return nil 
@@ -328,8 +335,9 @@ public final class TitleBarInterceptor {
             return nil
         }
 
-        let owner = appName(for: window)
-        let signals = chromeSignals(for: hitElement, window: window)
+        let owner    = appName(for: window)
+        let bundleId = bundleID(for: window)
+        let signals  = chromeSignals(for: hitElement, window: window)
 
         let qualification = qualifyHit(
             at: point,
@@ -341,19 +349,19 @@ public final class TitleBarInterceptor {
         switch qualification {
         case .accepted(let reason):
             AppLogger.log(
-                "title bar hit app=\(owner) variant=\(signals.variant) hitRole=\(signals.hitRole) via \(reason)",
+                "title bar hit app=\(owner) bundle=\(bundleId) variant=\(signals.variant) topBand=\(Int(signals.topBandHeight)) hitRole=\(signals.hitRole) via \(reason)",
                 subsystem: "interceptor"
             )
             return window
         case .semanticMiss(let reason):
             AppLogger.log(
-                "semantic miss app=\(owner) variant=\(signals.variant) hitRole=\(signals.hitRole) subrole=\(signals.hitSubrole) reason=\(reason)",
+                "semantic miss app=\(owner) bundle=\(bundleId) variant=\(signals.variant) topBand=\(Int(signals.topBandHeight)) hitRole=\(signals.hitRole) subrole=\(signals.hitSubrole) reason=\(reason)",
                 subsystem: "interceptor"
             )
             return nil
         case .geometricMiss(let reason):
             AppLogger.log(
-                "geometric miss app=\(owner) variant=\(signals.variant) hitRole=\(signals.hitRole) subrole=\(signals.hitSubrole) reason=\(reason)",
+                "geometric miss app=\(owner) bundle=\(bundleId) variant=\(signals.variant) topBand=\(Int(signals.topBandHeight)) hitRole=\(signals.hitRole) subrole=\(signals.hitSubrole) reason=\(reason)",
                 subsystem: "interceptor"
             )
             return nil
@@ -493,6 +501,15 @@ public final class TitleBarInterceptor {
             return "unknown"
         }
         return app.localizedName ?? app.bundleIdentifier ?? "pid-\(pid)"
+    }
+
+    private func bundleID(for element: AXUIElement) -> String {
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(element, &pid) == .success,
+              let app = NSRunningApplication(processIdentifier: pid) else {
+            return "unknown"
+        }
+        return app.bundleIdentifier ?? "pid-\(pid)"
     }
 
     private func qualifyHit(

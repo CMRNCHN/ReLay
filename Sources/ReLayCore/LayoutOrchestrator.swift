@@ -158,7 +158,7 @@ class LayoutOrchestrator {
         return CGRect(origin: position, size: size)
     }
 
-    private func setWindowFrame(_ window: AXUIElement, frame: CGRect) {
+    func setWindowFrame(_ window: AXUIElement, frame: CGRect) {
         var pos = frame.origin, size = frame.size
         guard let posVal  = AXValueCreate(.cgPoint, &pos),
               let sizeVal = AXValueCreate(.cgSize,  &size) else { return }
