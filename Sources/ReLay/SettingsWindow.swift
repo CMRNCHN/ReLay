@@ -2,111 +2,196 @@ import AppKit
 import Foundation
 
 final class SettingsWindowController: NSWindowController {
+
+    // MARK: - Definitions
+
+    private struct Setting {
+        let key: String
+        let title: String
+        let description: String
+        let min: Double
+        let max: Double
+        let defaultValue: Double
+        let unit: String
+
+        var stored: Double {
+            let v = UserDefaults.standard.double(forKey: key)
+            return v > 0 ? v : defaultValue
+        }
+    }
+
+    private let settings: [Setting] = [
+        Setting(
+            key: "lockThreshold",
+            title: "Direction Lock",
+            description: "How far to move before Relay picks a direction. Lower = more responsive.",
+            min: 5, max: 50, defaultValue: 20, unit: "pt"
+        ),
+        Setting(
+            key: "cancelThreshold",
+            title: "Diagonal Forgiveness",
+            description: "How diagonal a swipe can be before Relay ignores it.",
+            min: 10, max: 60, defaultValue: 25, unit: "pt"
+        ),
+        Setting(
+            key: "actionThreshold",
+            title: "Snap Distance",
+            description: "How far to swipe before a window snaps into place.",
+            min: 30, max: 250, defaultValue: 100, unit: "pt"
+        ),
+        Setting(
+            key: "flickVelocity",
+            title: "Quick Flick Speed",
+            description: "Flick faster than this to snap instantly without reaching the full distance.",
+            min: 200, max: 2000, defaultValue: 800, unit: "pt/s"
+        )
+    ]
+
+    // MARK: - State
+
+    private var sliders: [NSSlider] = []
+    private var valueLabels: [NSTextField] = []
+
+    // MARK: - Init
+
     convenience init() {
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 400, height: 200),
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 460, height: 410),
             styleMask: [.titled, .closable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
-        window.title = "ReLay Preferences"
-        window.center()
-        window.isReleasedWhenClosed = false
-        self.init(window: window)
-        setupView()
+        panel.title = "Relay"
+        panel.titlebarAppearsTransparent = true
+        panel.center()
+        panel.isReleasedWhenClosed = false
+        self.init(window: panel)
+        buildUI()
     }
 
-    private func setupView() {
-        guard let window = window else { return }
-        let contentView = NSView(frame: window.contentView!.bounds)
-        window.contentView = contentView
+    // MARK: - UI
 
-        let stackView = NSStackView()
-        stackView.orientation = .vertical
-        stackView.alignment = .leading
-        stackView.spacing = 20
-        stackView.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
-        stackView.translatesAutoresizingMaskIntoConstraints = false
+    private func buildUI() {
+        guard let window else { return }
 
-        contentView.addSubview(stackView)
+        let fx = NSVisualEffectView()
+        fx.material = .sidebar
+        fx.blendingMode = .behindWindow
+        fx.state = .active
+        window.contentView = fx
+
+        let outer = NSStackView()
+        outer.orientation = .vertical
+        outer.spacing = 0
+        outer.edgeInsets = NSEdgeInsets(top: 52, left: 28, bottom: 24, right: 28)
+        outer.translatesAutoresizingMaskIntoConstraints = false
+        fx.addSubview(outer)
         NSLayoutConstraint.activate([
-            stackView.topAnchor.constraint(equalTo: contentView.topAnchor),
-            stackView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
-            stackView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
-            stackView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor)
+            outer.topAnchor.constraint(equalTo: fx.topAnchor),
+            outer.leadingAnchor.constraint(equalTo: fx.leadingAnchor),
+            outer.trailingAnchor.constraint(equalTo: fx.trailingAnchor),
+            outer.bottomAnchor.constraint(equalTo: fx.bottomAnchor)
         ])
 
-        // Lock Threshold
-        let lockStack = NSStackView()
-        lockStack.spacing = 10
-        let lockLabel = NSTextField(labelWithString: "Gesture Lock Threshold (px):")
-        let lockField = NSTextField(string: String(format: "%.0f", UserDefaults.standard.double(forKey: "lockThreshold") != 0 ? UserDefaults.standard.double(forKey: "lockThreshold") : 20.0))
-        lockField.widthAnchor.constraint(equalToConstant: 60).isActive = true
-        lockStack.addArrangedSubview(lockLabel)
-        lockStack.addArrangedSubview(lockField)
-        stackView.addArrangedSubview(lockStack)
+        for (i, setting) in settings.enumerated() {
+            if i > 0 {
+                let sep = NSBox()
+                sep.boxType = .separator
+                outer.addArrangedSubview(sep)
+                outer.setCustomSpacing(0, after: sep)
+            }
+            let row = buildRow(for: setting, index: i)
+            outer.addArrangedSubview(row)
+            outer.setCustomSpacing(0, after: row)
+        }
 
-        // Action Threshold
-        let actionStack = NSStackView()
-        actionStack.spacing = 10
-        let actionLabel = NSTextField(labelWithString: "Layout Action Threshold (px):")
-        let actionField = NSTextField(string: String(format: "%.0f", UserDefaults.standard.double(forKey: "actionThreshold") != 0 ? UserDefaults.standard.double(forKey: "actionThreshold") : 100.0))
-        actionField.widthAnchor.constraint(equalToConstant: 60).isActive = true
-        actionStack.addArrangedSubview(actionLabel)
-        actionStack.addArrangedSubview(actionField)
-        stackView.addArrangedSubview(actionStack)
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .vertical)
+        outer.addArrangedSubview(spacer)
 
-        // Flick Velocity
-        let flickStack = NSStackView()
-        flickStack.spacing = 10
-        let flickLabel = NSTextField(labelWithString: "Flick Velocity (px/s):")
-        let flickField = NSTextField(string: String(format: "%.0f", UserDefaults.standard.double(forKey: "flickVelocity") != 0 ? UserDefaults.standard.double(forKey: "flickVelocity") : 800.0))
-        flickField.widthAnchor.constraint(equalToConstant: 60).isActive = true
-        flickStack.addArrangedSubview(flickLabel)
-        flickStack.addArrangedSubview(flickField)
-        stackView.addArrangedSubview(flickStack)
-
-        // Cancel Threshold
-        let cancelStack = NSStackView()
-        cancelStack.spacing = 10
-        let cancelLabel = NSTextField(labelWithString: "Cancel Threshold (px):")
-        let cancelField = NSTextField(string: String(format: "%.0f", UserDefaults.standard.double(forKey: "cancelThreshold") != 0 ? UserDefaults.standard.double(forKey: "cancelThreshold") : 25.0))
-        cancelField.widthAnchor.constraint(equalToConstant: 60).isActive = true
-        cancelStack.addArrangedSubview(cancelLabel)
-        cancelStack.addArrangedSubview(cancelField)
-        stackView.addArrangedSubview(cancelStack)
-
-        // Save Button
-        let saveButton = NSButton(title: "Save & Apply", target: self, action: #selector(saveSettings))
-        saveButton.keyEquivalent = "\r"
-        stackView.addArrangedSubview(saveButton)
-
-        self.lockField = lockField
-        self.actionField = actionField
-        self.flickField = flickField
-        self.cancelField = cancelField
+        let resetBtn = NSButton(title: "Reset to Defaults", target: self, action: #selector(resetAll))
+        resetBtn.bezelStyle = .rounded
+        resetBtn.font = .systemFont(ofSize: 13)
+        outer.addArrangedSubview(resetBtn)
+        outer.setCustomSpacing(12, after: spacer)
     }
 
-    private var lockField: NSTextField?
-    private var actionField: NSTextField?
-    private var flickField: NSTextField?
-    private var cancelField: NSTextField?
+    private func buildRow(for setting: Setting, index: Int) -> NSView {
+        let container = NSView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+        container.heightAnchor.constraint(equalToConstant: 84).isActive = true
 
-    @objc private func saveSettings() {
-        if let lockText = lockField?.stringValue, let lockVal = Double(lockText) {
-            UserDefaults.standard.set(lockVal, forKey: "lockThreshold")
-        }
-        if let actionText = actionField?.stringValue, let actionVal = Double(actionText) {
-            UserDefaults.standard.set(actionVal, forKey: "actionThreshold")
-        }
-        if let flickText = flickField?.stringValue, let flickVal = Double(flickText) {
-            UserDefaults.standard.set(flickVal, forKey: "flickVelocity")
-        }
-        if let cancelText = cancelField?.stringValue, let cancelVal = Double(cancelText) {
-            UserDefaults.standard.set(cancelVal, forKey: "cancelThreshold")
-        }
-        
+        let titleLabel = NSTextField(labelWithString: setting.title)
+        titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        titleLabel.setContentHuggingPriority(.required, for: .horizontal)
+
+        let valueLbl = NSTextField(labelWithString: displayText(setting.stored, unit: setting.unit))
+        valueLbl.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        valueLbl.textColor = .secondaryLabelColor
+        valueLbl.alignment = .right
+        valueLbl.setContentHuggingPriority(.required, for: .horizontal)
+        valueLabels.append(valueLbl)
+
+        let titleRow = NSStackView(views: [titleLabel, valueLbl])
+        titleRow.distribution = .fill
+        titleRow.spacing = 8
+
+        let slider = NSSlider(
+            value: setting.stored,
+            minValue: setting.min,
+            maxValue: setting.max,
+            target: self,
+            action: #selector(sliderChanged(_:))
+        )
+        slider.isContinuous = true
+        slider.tag = index
+        sliders.append(slider)
+
+        let desc = NSTextField(labelWithString: setting.description)
+        desc.font = .systemFont(ofSize: 11)
+        desc.textColor = .tertiaryLabelColor
+        desc.lineBreakMode = .byWordWrapping
+        desc.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        let stack = NSStackView(views: [titleRow, slider, desc])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 5
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(stack)
+
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            stack.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+            titleRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            slider.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            desc.widthAnchor.constraint(equalTo: stack.widthAnchor)
+        ])
+
+        return container
+    }
+
+    // MARK: - Actions
+
+    @objc private func sliderChanged(_ slider: NSSlider) {
+        let i = slider.tag
+        let v = slider.doubleValue
+        valueLabels[i].stringValue = displayText(v, unit: settings[i].unit)
+        UserDefaults.standard.set(v, forKey: settings[i].key)
         NotificationCenter.default.post(name: NSNotification.Name("ReLaySettingsChanged"), object: nil)
-        window?.close()
+    }
+
+    @objc private func resetAll() {
+        for (i, setting) in settings.enumerated() {
+            sliders[i].doubleValue = setting.defaultValue
+            valueLabels[i].stringValue = displayText(setting.defaultValue, unit: setting.unit)
+            UserDefaults.standard.set(setting.defaultValue, forKey: setting.key)
+        }
+        NotificationCenter.default.post(name: NSNotification.Name("ReLaySettingsChanged"), object: nil)
+    }
+
+    private func displayText(_ v: Double, unit: String) -> String {
+        "\(Int(v)) \(unit)"
     }
 }

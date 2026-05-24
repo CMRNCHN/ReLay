@@ -70,6 +70,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showAccessibilityAlert() {
+        if AXIsProcessTrusted() {
+            startInterceptor()
+            return
+        }
+
         let alert = NSAlert()
         alert.messageText = "Accessibility Permissions Required"
         alert.informativeText = "ReLay needs Accessibility permissions to intercept title bar gestures and manage your windows.\n\nPlease grant permission in System Settings > Privacy & Security > Accessibility and then click 'Check Again'."
