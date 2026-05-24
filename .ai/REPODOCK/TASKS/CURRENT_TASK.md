@@ -2,11 +2,11 @@
 
 ## Task Title
 
-Commit full current worktree snapshot
+Phase 1 + Phase 2 (partial): semantic-core tests + gesture ingress improvements
 
 ## Request Date
 
-2026-05-15
+2026-05-20
 
 ## Status
 
@@ -14,78 +14,60 @@ Completed
 
 ## Objective
 
-Bundle the full current repository state into a single commit and generate a commit message that matches the actual included work.
+Harden the semantic core with automated test coverage and advance gesture ingress
+stabilization toward the five-app target matrix.
 
-## Start-Of-Task Review Summary
+## Work Done
 
-- reviewed the required governance and RepoDock task surfaces
-- inspected the remaining tracked and untracked worktree changes after the earlier `.ai` and naming cleanup commits
-- confirmed the remaining scope includes runtime source changes, new support files, tests, and repo tooling/config files
+### Phase 1 — Semantic Core Tests (complete)
 
-## Constraints
+Added `Tests/ReLayCoreTests/SemanticCoreTests.swift` with three suites:
 
-- include the full current worktree as requested
-- do not rewrite or selectively clean unrelated runtime changes during the commit task
-- keep the commit message aligned with the dominant technical changes
+- `TransitionGraphTests` — 34 tests covering every edge in `LayoutTransitionGraph`,
+  including cross-column sixth jumps, vertical subdivision, and edge-resistance nil cases.
+- `LayoutResolverTests` — 21 tests covering geometry for all named states, inference
+  round-trips, unknown/zero-frame fallback to `.floating`, and interpolation clamping.
+- `WindowRecordTests` — 7 tests covering state transitions, rewind, history cap at 12,
+  and floatingFrame preservation across transitions.
 
-## Files Expected To Change
+Total test count: 10 → 72. All passing.
 
-- `.ai/REPODOCK/*`
-- `Sources/ReLay/*`
-- `Sources/ReLayCore/*`
-- `Tests/*`
-- repo tooling/config files under `.air/`, `.claude/`, `.junie/`, `.vscode/`
+### Phase 2 — TitleBarInterceptor ingress fixes (partial)
 
-## Files Actually Changed
+Fixed `ChromeSignals` in `TitleBarInterceptor.swift`:
 
-- `.ai/REPODOCK/TASKS/CURRENT_TASK.md`
-- `.ai/REPODOCK/HANDOFFS/LATEST_HANDOFF.md`
-- `.ai/REPODOCK/LOGS/2026-05-15_full-worktree-commit.md`
-- `.junie/memory/*`
-- `.air/*`
-- `.claude/settings.json`
-- `.vscode/launch.json`
-- `Sources/ReLay/main.swift`
-- `Sources/ReLayCore/AccessibilityBootstrap.swift`
-- `Sources/ReLayCore/AppLogger.swift`
-- `Sources/ReLayCore/GestureEngine.swift`
-- `Sources/ReLayCore/LayoutResolver.swift`
-- `Sources/ReLayCore/SpatialTransitionEngine.swift`
-- `Sources/ReLayCore/TitleBarInterceptor.swift`
-- `Sources/ReLayCore/WindowStateStore.swift`
-- `Tests/ReLayCoreTests/ReLayCoreTests.swift`
+- Added `tabbed-toolbar` variant for apps that expose both AXTabGroup and AXToolbar
+  (Safari, Chrome, Xcode). Previous code returned 44px topBandHeight for any app with
+  tabs regardless of whether a toolbar was also present; now returns 80px for the
+  combined case.
+- `tabbed`-only variant (Terminal) still uses 44px.
+- Added `bundleID(for:)` helper.
+- All miss log lines now include `bundle=<id>` and `topBand=<px>` for per-app calibration.
 
-## Verification Performed
-
-- inspected current `git status`
-- reviewed the remaining diff summary before staging
-- confirmed the worktree still includes an in-flight compile issue in `TitleBarInterceptor.swift`
-- staged the full current worktree for commit
+Created `.ai/REPODOCK/CONTEXT/GESTURE_INGRESS_MATRIX.md` — reference table documenting
+expected variant, topBandHeight, and risk points for each target app, plus a live-log
+characterization guide.
 
 ## Architecture Boundaries Touched
 
-- app bootstrap
-- gesture layer
-- transition layer
-- resolver layer
-- state store
-- accessibility/bootstrap support
-- runtime logging/diagnostics
-- governance and tooling metadata
+- `TitleBarInterceptor` — chrome signal classification and diagnostic logging
+- test target only (new file)
+- REPODOCK context docs
 
 ## Behavior Changes
 
-- runtime now includes added bootstrap and logging support files
-- gesture ingress and transition tracing changes are included
-- repo tooling and local workflow config files are included in the snapshot
-- this commit does not guarantee a passing build; current compile status remains a known issue
+- Two-finger gestures in the combined tab+toolbar region of Safari and Xcode will now
+  be accepted where they previously triggered geometric misses.
+- Logs now emit `bundle=` and `topBand=` on every outcome, enabling per-app diagnostics.
 
 ## Risks / Follow-Ups
 
-- this snapshot commit includes work that is not yet build-clean
-- local tool configuration files are being committed as part of the requested full snapshot
-- next work should restore compile health before further runtime claims
+- Live verification still needed across all five target apps.
+- Xcode's toolbar height on large displays may exceed 80px — check logs if misses persist.
+- System Settings content-ownership behavior is correct but should be confirmed on device.
 
 ## Next Task Recommendation
 
-Fix the `TitleBarInterceptor.swift` compile failure and bring `swift build` / `swift test` back to green.
+Run ReLay against the five-app matrix (Finder, Safari, Terminal, Xcode, Settings),
+collect logs, and fill in the verification-status table in GESTURE_INGRESS_MATRIX.md.
+Then proceed to Phase 3 (runtime observability — per-gesture correlation IDs).
