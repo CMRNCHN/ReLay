@@ -117,6 +117,8 @@ public final class TitleBarInterceptor {
     private var isTrackingGesture = false
     private var activeTargetWindow: AXUIElement?
     private var lastKnownTouchCount: Int = 2
+    private var isTracking3Finger = false
+    private var accumulated3FingerY: CGFloat = 0
 
     // Configuration
     public init() {}
@@ -218,17 +220,40 @@ public final class TitleBarInterceptor {
         if type == .keyDown {
             if let nsEvent = NSEvent(cgEvent: event) {
                 let modifiers = nsEvent.modifierFlags.intersection(.deviceIndependentFlagsMask)
-                if modifiers == [.control, .option] && nsEvent.keyCode == 49 {
-                    if let frontmost = getFrontmostWindow() {
+                let keyCode  = nsEvent.keyCode
+
+                // Route navigation keys to expose while it is open (swallows them)
+                if LayoutExposeController.shared.isPresented {
+                    switch keyCode {
+                    case 53, 36, 76, 123, 124, 125, 126:
+                        let code = keyCode
                         DispatchQueue.main.async {
-                            LayoutExposeController.shared.present(triggerWindow: frontmost)
+                            LayoutExposeController.shared.handleKeyCode(code)
                         }
                         return nil // Swallow
+                    default:
+                        break
                     }
                 }
 
+                // Global shortcut: Ctrl+Option+Space opens Layout Exposé
+                if modifiers == [.control, .option] && keyCode == 49 {
+                    DispatchQueue.main.async {
+                        LayoutExposeController.shared.present(triggerWindow: self.getFrontmostWindow())
+                    }
+                    return nil // Swallow
+                }
+
+                // Shuffle layout slots: Ctrl+Option+Tab
+                if modifiers == [.control, .option] && keyCode == 48 {
+                    DispatchQueue.main.async {
+                        SpatialTransitionEngine.shared.shuffleExposeLayout()
+                    }
+                    return nil
+                }
+
                 // Emergency Kill Switch (Cmd + Shift + Escape)
-                if modifiers == [.command, .shift] && nsEvent.keyCode == 53 {
+                if modifiers == [.command, .shift] && keyCode == 53 {
                     AppLogger.log("emergency kill-switch triggered via keyboard", subsystem: "interceptor")
                     delegate?.killSwitchTriggered()
                     return nil // Swallow to prevent system seeing it
@@ -260,20 +285,46 @@ public final class TitleBarInterceptor {
         if phase == .began {
             AppLogger.log("scroll phase began", subsystem: "interceptor")
             let location = event.location
-            
+            let fingerCount = lastKnownTouchCount
+
             if let window = hitTestTitleBar(at: location) {
                 isTrackingGesture = true
                 activeTargetWindow = window
-                AppLogger.log("title bar hit; beginning gesture tracking fingers=\(lastKnownTouchCount)", subsystem: "interceptor")
-                delegate?.gestureDidBegin(on: window, at: location, fingerCount: lastKnownTouchCount)
-                
-                // Swallow the event to prevent underlying scroll
-                return nil 
+                AppLogger.log("title bar hit; beginning gesture tracking fingers=\(fingerCount)", subsystem: "interceptor")
+                delegate?.gestureDidBegin(on: window, at: location, fingerCount: fingerCount)
+                return nil
             } else {
                 AppLogger.log("scroll began outside title bar hit region", subsystem: "interceptor")
+                // 3-finger gestures trigger expose from anywhere on screen
+                if fingerCount >= 3 {
+                    isTracking3Finger = true
+                    accumulated3FingerY = 0
+                    return nil
+                }
             }
         }
-        
+
+        // Handle 3-finger global tracking (non-title-bar areas)
+        if isTracking3Finger {
+            if phase == .changed {
+                accumulated3FingerY += nsEvent.scrollingDeltaY
+                return nil
+            }
+            if phase == .ended || phase == .cancelled || momentumPhase == .began {
+                let y = accumulated3FingerY
+                isTracking3Finger = false
+                accumulated3FingerY = 0
+                if y < -50 {
+                    AppLogger.log("3-finger swipe down detected; presenting expose", subsystem: "interceptor")
+                    DispatchQueue.main.async {
+                        LayoutExposeController.shared.present(triggerWindow: self.getFrontmostWindow())
+                    }
+                }
+                return nil
+            }
+            return nil // Swallow any other event while tracking
+        }
+
         // Phase: Changed (Physical finger movement)
         if phase == .changed && isTrackingGesture {
             // Calculate velocity approximation (pixels per second based on standard 60hz scroll polling)
@@ -611,6 +662,8 @@ public final class TitleBarInterceptor {
     private func resetState() {
         isTrackingGesture = false
         activeTargetWindow = nil
+        isTracking3Finger = false
+        accumulated3FingerY = 0
     }
     
     enum InterceptorError: Error {
