@@ -166,8 +166,10 @@ public final class TitleBarInterceptor {
             matching: NSEvent.EventTypeMask(rawValue: 1 << 29)
         ) { [weak self] event in
             let count = event.touches(matching: .touching, in: nil).count
+            // Always update (including count==0) so stale 3-finger count doesn't bleed
+            // into the next gesture (e.g. after 3-finger expose → 2-finger title-bar swipe).
+            self?.lastKnownTouchCount = count > 0 ? count : 2
             if count > 0 {
-                self?.lastKnownTouchCount = count
                 AppLogger.log("touch count observed count=\(count)", subsystem: "interceptor")
             }
         }

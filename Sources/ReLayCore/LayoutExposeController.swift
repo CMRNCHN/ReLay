@@ -227,6 +227,15 @@ public final class LayoutExposeController: NSWindowController {
     private func applyTemplate(_ template: LayoutTemplate, workspace: WorkspacePreset? = nil) {
         AppLogger.log("expose: applying \(template.name)", subsystem: "expose")
 
+        // Stage Manager keeps shelf windows hidden from AX enumeration and prevents
+        // frame changes on non-active windows. Disable it first so all windows are
+        // addressable, then proceed with layout.
+        if orchestrator.isStageManagerEnabled() {
+            AppLogger.log("expose: disabling Stage Manager to access shelf windows", subsystem: "expose")
+            orchestrator.setStageManager(false)
+            currentWindows = makeWindowItems()
+        }
+
         var assignments: [Int: LayoutWindowItem] = [:]
         var remaining = currentWindows
 
