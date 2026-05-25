@@ -1,8 +1,6 @@
 import AppKit
 import ApplicationServices
 
-// MARK: - Controller
-
 public final class LayoutExposeController: NSWindowController {
     public static let shared = LayoutExposeController()
 
@@ -11,16 +9,19 @@ public final class LayoutExposeController: NSWindowController {
     private var triggerWindow: AXUIElement?
     private var screenFrame: CGRect = .zero
     private var currentWindows: [LayoutWindowItem] = []
-    private var eventMonitor: Any?
+    private var currentWorkspace: WorkspacePreset?
 
-    private var cards: [TemplateCardView] = []
+    public private(set) var isPresented: Bool = false
+
+    private var suggestions: [LayoutSuggestionEngine.Suggestion] = []
     private var selectedIndex: Int = 0 {
         didSet { updateCardSelection() }
     }
+    private var cards: [TemplateCardView] = []
 
     private init() {
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 760, height: 450),
+            contentRect: NSRect(x: 0, y: 0, width: 820, height: 480),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -38,36 +39,54 @@ public final class LayoutExposeController: NSWindowController {
 
     // MARK: - Present / Dismiss
 
-    public func present(triggerWindow: AXUIElement) {
+    public func present(triggerWindow: AXUIElement? = nil) {
         self.triggerWindow = triggerWindow
-        self.screenFrame = orchestrator.getUsableScreenFrame(for: triggerWindow)
+        if let tw = triggerWindow {
+            self.screenFrame = orchestrator.getUsableScreenFrame(for: tw)
+        } else {
+            self.screenFrame = mainScreenFrame()
+        }
         self.currentWindows = makeWindowItems()
+        self.currentWorkspace = nil
         self.selectedIndex = 0
 
         buildUI()
         centerOnScreen()
 
+        isPresented = true
         window?.alphaValue = 0
         NSApp.activate(ignoringOtherApps: true)
         showWindow(nil)
 
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.20
+            ctx.duration = 0.18
             ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
             window?.animator().alphaValue = 1
         }
-
-        installKeyboardMonitor()
     }
 
     public override func close() {
-        uninstallKeyboardMonitor()
+        isPresented = false
         NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.14
+            ctx.duration = 0.12
             ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
             window?.animator().alphaValue = 0
         }) { [weak self] in
             self?.window?.orderOut(nil)
+        }
+    }
+
+    // MARK: - Keyboard (called by TitleBarInterceptor when isPresented)
+
+    public func handleKeyCode(_ keyCode: UInt16) {
+        switch keyCode {
+        case 53:           close()                               // Escape
+        case 36, 76:       applySelected()                       // Return / numpad Enter
+        case 123:          navigate(-1, axis: .horizontal)        // ←
+        case 124:          navigate( 1, axis: .horizontal)        // →
+        case 125:          navigate( 1, axis: .vertical)          // ↓
+        case 126:          navigate(-1, axis: .vertical)          // ↑
+        default:           break
         }
     }
 
@@ -105,31 +124,42 @@ public final class LayoutExposeController: NSWindowController {
         titleLabel.font = .systemFont(ofSize: 22, weight: .bold)
         titleLabel.textColor = .white
         outer.addArrangedSubview(titleLabel)
-        outer.setCustomSpacing(5, after: titleLabel)
+        outer.setCustomSpacing(4, after: titleLabel)
 
-        let subtitle = NSTextField(labelWithString: "Arrange your windows with one click")
+        let subtitle = NSTextField(labelWithString: "Click a layout to apply it instantly")
         subtitle.font = .systemFont(ofSize: 13)
         subtitle.textColor = NSColor.white.withAlphaComponent(0.45)
         outer.addArrangedSubview(subtitle)
-        outer.setCustomSpacing(22, after: subtitle)
+        outer.setCustomSpacing(20, after: subtitle)
+
+        // Rank templates via suggestion engine
+        let context = LayoutSuggestionEngine.Context(
+            windows: currentWindows,
+            activeWindow: currentWindows.first(where: { $0.element == triggerWindow }),
+            screenSize: screenFrame.size,
+            isUltrawide: screenFrame.width > screenFrame.height * 2.1,
+            recentTemplateIDs: LayoutHistoryStore.shared.getRecentTemplateIDs(),
+            workspaces: LayoutHistoryStore.shared.getWorkspaces(),
+            history: LayoutHistoryStore.shared.getHistory()
+        )
+        suggestions = LayoutSuggestionEngine.rank(context: context)
 
         // Template grid — 3 cards per row
-        let templates = LayoutTemplate.all
         let cols = 3
         var cardIndex = 0
 
-        while cardIndex < templates.count {
+        while cardIndex < suggestions.count {
             let row = NSStackView()
             row.orientation = .horizontal
             row.spacing = 14
             row.distribution = .fillEqually
 
-            for _ in 0..<cols where cardIndex < templates.count {
-                let t = templates[cardIndex]
-                let icons = autoFillIconsFor(t)
-                let card = TemplateCardView(template: t, assignedIcons: icons)
+            for _ in 0..<cols where cardIndex < suggestions.count {
+                let s = suggestions[cardIndex]
+                let icons = autoFillIconsFor(s.template)
+                let card = TemplateCardView(template: s.template, assignedIcons: icons, reason: s.reason)
                 card.onActivate = { [weak self] in
-                    self?.applyTemplate(t)
+                    self?.applyTemplate(s.template)
                 }
                 row.addArrangedSubview(card)
                 cards.append(card)
@@ -138,6 +168,28 @@ public final class LayoutExposeController: NSWindowController {
 
             outer.addArrangedSubview(row)
             outer.setCustomSpacing(12, after: row)
+        }
+
+        // Saved workspaces row
+        let workspaces = LayoutHistoryStore.shared.getWorkspaces().sorted(by: { $0.lastUsedAt > $1.lastUsedAt })
+        if !workspaces.isEmpty {
+            outer.setCustomSpacing(8, after: outer.arrangedSubviews.last!)
+            let wsLabel = NSTextField(labelWithString: "Saved Workspaces")
+            wsLabel.font = .systemFont(ofSize: 11, weight: .semibold)
+            wsLabel.textColor = NSColor.white.withAlphaComponent(0.35)
+            outer.addArrangedSubview(wsLabel)
+            outer.setCustomSpacing(6, after: wsLabel)
+
+            let wsRow = NSStackView()
+            wsRow.orientation = .horizontal
+            wsRow.spacing = 10
+            for ws in workspaces.prefix(4) {
+                let btn = WorkspaceChipView(workspace: ws)
+                btn.onActivate = { [weak self] in self?.applyWorkspace(ws) }
+                wsRow.addArrangedSubview(btn)
+            }
+            outer.addArrangedSubview(wsRow)
+            outer.setCustomSpacing(10, after: wsRow)
         }
 
         // Footer
@@ -155,7 +207,7 @@ public final class LayoutExposeController: NSWindowController {
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
         footer.addArrangedSubview(spacer)
 
-        let hint = NSTextField(labelWithString: "↑↓←→ navigate  ·  ↵ apply  ·  esc cancel")
+        let hint = NSTextField(labelWithString: "↑↓←→ navigate  ·  ↵ apply  ·  esc close  ·  ⌃⌥⇥ shuffle after")
         hint.font = .systemFont(ofSize: 11)
         hint.textColor = NSColor.white.withAlphaComponent(0.28)
         footer.addArrangedSubview(hint)
@@ -172,11 +224,36 @@ public final class LayoutExposeController: NSWindowController {
 
     // MARK: - Apply
 
-    private func applyTemplate(_ template: LayoutTemplate) {
+    private func applyTemplate(_ template: LayoutTemplate, workspace: WorkspacePreset? = nil) {
         AppLogger.log("expose: applying \(template.name)", subsystem: "expose")
 
-        let assignments = autoFillFor(template)
+        var assignments: [Int: LayoutWindowItem] = [:]
+        var remaining = currentWindows
 
+        // If workspace, honour its slot rules first
+        if let ws = workspace {
+            for (slotID, roles) in ws.slotRules {
+                if let idx = remaining.firstIndex(where: { roles.contains($0.role) }) {
+                    assignments[slotID] = remaining.remove(at: idx)
+                }
+            }
+        }
+        // Auto-fill remaining slots by preferred role, then first-come
+        for slot in template.slots {
+            if assignments[slot.id] != nil { continue }
+            if let idx = remaining.firstIndex(where: { slot.preferredRoles.contains($0.role) }) {
+                assignments[slot.id] = remaining.remove(at: idx)
+            }
+        }
+        for slot in template.slots where assignments[slot.id] == nil && !remaining.isEmpty {
+            assignments[slot.id] = remaining.remove(at: 0)
+        }
+
+        // Register slot order for shuffle hotkey
+        let orderedWindows = template.slots.compactMap { assignments[$0.id]?.element }
+        SpatialTransitionEngine.shared.registerExposeState(template: template, windows: orderedWindows, screenFrame: screenFrame)
+
+        // Capture undo frames
         var originalFrames: [AXUIElement: CGRect] = [:]
         for (_, item) in assignments {
             if let frame = orchestrator.getWindowFrame(item.element) {
@@ -185,6 +262,7 @@ public final class LayoutExposeController: NSWindowController {
         }
         SpatialTransitionEngine.shared.registerExposeUndo(frames: originalFrames)
 
+        // Animate to target frames
         for slot in template.slots {
             if let item = assignments[slot.id] {
                 let target = template.frame(for: slot, in: screenFrame)
@@ -192,9 +270,10 @@ public final class LayoutExposeController: NSWindowController {
             }
         }
 
+        // Record usage
         let event = AppliedLayoutEvent(
             layoutTemplateID: template.id,
-            workspacePresetID: nil,
+            workspacePresetID: workspace?.id,
             visibleWindowRoles: currentWindows.map { $0.role },
             visibleAppBundleIDs: currentWindows.compactMap { $0.bundleID },
             screenAspectRatio: screenFrame.width / max(1, screenFrame.height),
@@ -205,51 +284,29 @@ public final class LayoutExposeController: NSWindowController {
         close()
     }
 
-    // MARK: - Auto-fill helpers
+    private func applyWorkspace(_ workspace: WorkspacePreset) {
+        guard let template = LayoutTemplate.all.first(where: { $0.id == workspace.layoutTemplateID }) else { return }
+        applyTemplate(template, workspace: workspace)
+    }
 
-    private func autoFillFor(_ template: LayoutTemplate) -> [Int: LayoutWindowItem] {
-        var result: [Int: LayoutWindowItem] = [:]
+    // MARK: - Icon helper
+
+    private func autoFillIconsFor(_ template: LayoutTemplate) -> [Int: NSImage] {
+        var result: [Int: NSImage] = [:]
         var remaining = currentWindows
-
         for slot in template.slots {
             if let idx = remaining.firstIndex(where: { slot.preferredRoles.contains($0.role) }) {
-                result[slot.id] = remaining.remove(at: idx)
+                let item = remaining.remove(at: idx)
+                result[slot.id] = item.appIcon
             }
         }
         for slot in template.slots where result[slot.id] == nil && !remaining.isEmpty {
-            result[slot.id] = remaining.remove(at: 0)
+            result[slot.id] = remaining.remove(at: 0).appIcon
         }
-        return result
-    }
-
-    private func autoFillIconsFor(_ template: LayoutTemplate) -> [Int: NSImage] {
-        Dictionary(uniqueKeysWithValues:
-            autoFillFor(template).compactMap { slotID, item in
-                item.appIcon.map { (slotID, $0) }
-            }
-        )
+        return result.compactMapValues { $0 }
     }
 
     // MARK: - Keyboard navigation
-
-    private func installKeyboardMonitor() {
-        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self else { return event }
-            switch event.keyCode {
-            case 53:       self.close();          return nil   // Escape
-            case 36, 76:   self.applySelected();  return nil   // Return / numpad Enter
-            case 123:      self.navigate(-1, axis: .horizontal); return nil  // ←
-            case 124:      self.navigate( 1, axis: .horizontal); return nil  // →
-            case 125:      self.navigate( 1, axis: .vertical);   return nil  // ↓
-            case 126:      self.navigate(-1, axis: .vertical);   return nil  // ↑
-            default:       return event
-            }
-        }
-    }
-
-    private func uninstallKeyboardMonitor() {
-        if let m = eventMonitor { NSEvent.removeMonitor(m); eventMonitor = nil }
-    }
 
     private enum NavAxis { case horizontal, vertical }
 
@@ -271,8 +328,8 @@ public final class LayoutExposeController: NSWindowController {
     }
 
     private func applySelected() {
-        guard selectedIndex < cards.count else { return }
-        cards[selectedIndex].onActivate?()
+        guard selectedIndex < suggestions.count else { return }
+        applyTemplate(suggestions[selectedIndex].template)
     }
 
     private func updateCardSelection() {
@@ -295,6 +352,14 @@ public final class LayoutExposeController: NSWindowController {
         let sf = screen.visibleFrame
         let wf = window.frame
         window.setFrameOrigin(CGPoint(x: sf.midX - wf.width / 2, y: sf.midY - wf.height / 2))
+    }
+
+    private func mainScreenFrame() -> CGRect {
+        guard let primary = NSScreen.screens.first else { return .zero }
+        let target = NSScreen.main ?? primary
+        let vf = target.visibleFrame
+        let flipped = primary.frame.height - (vf.origin.y + vf.height)
+        return CGRect(x: vf.origin.x, y: flipped, width: vf.width, height: vf.height)
     }
 
     private func makeWindowItems() -> [LayoutWindowItem] {
@@ -321,15 +386,17 @@ public final class LayoutExposeController: NSWindowController {
 final class TemplateCardView: NSView {
     let template: LayoutTemplate
     var assignedIcons: [Int: NSImage]
+    let reason: String
     var onActivate: (() -> Void)?
 
     private var isHovered  = false
     private var isSelected = false
     private var trackingArea: NSTrackingArea?
 
-    init(template: LayoutTemplate, assignedIcons: [Int: NSImage]) {
+    init(template: LayoutTemplate, assignedIcons: [Int: NSImage], reason: String = "") {
         self.template = template
         self.assignedIcons = assignedIcons
+        self.reason = reason
         super.init(frame: .zero)
         wantsLayer = true
         translatesAutoresizingMaskIntoConstraints = false
@@ -337,6 +404,9 @@ final class TemplateCardView: NSView {
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    // Accept first-mouse so clicks register even though the panel is nonactivating
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { return true }
 
     func setSelected(_ selected: Bool) {
         guard selected != isSelected else { return }
@@ -364,7 +434,6 @@ final class TemplateCardView: NSView {
     // MARK: - Drawing
 
     override func draw(_ dirtyRect: NSRect) {
-        // Card background
         let bgAlpha: CGFloat = isSelected ? 0.22 : isHovered ? 0.15 : 0.09
         let bgColor: NSColor = isSelected
             ? NSColor.controlAccentColor.withAlphaComponent(bgAlpha)
@@ -372,7 +441,6 @@ final class TemplateCardView: NSView {
         bgColor.setFill()
         NSBezierPath(roundedRect: bounds, xRadius: 14, yRadius: 14).fill()
 
-        // Border
         let borderAlpha: CGFloat = isSelected ? 0.9 : isHovered ? 0.40 : 0.18
         let borderColor: NSColor = isSelected
             ? NSColor.controlAccentColor.withAlphaComponent(borderAlpha)
@@ -382,9 +450,8 @@ final class TemplateCardView: NSView {
         borderPath.lineWidth = isSelected ? 1.5 : 1.0
         borderPath.stroke()
 
-        // Diagram area — leaves 28pt at bottom for the name label
         let nameH: CGFloat = 28
-        let pad: CGFloat   = 10
+        let pad: CGFloat = 10
         let diagramRect = CGRect(x: pad, y: nameH, width: bounds.width - pad * 2, height: bounds.height - nameH - pad)
 
         drawSlots(in: diagramRect)
@@ -395,7 +462,6 @@ final class TemplateCardView: NSView {
         let slotFill = NSColor.white.withAlphaComponent(isSelected ? 0.28 : 0.18)
 
         for slot in template.slots {
-            // Template uses top-left-origin coords; AppKit uses bottom-left — flip Y
             let flippedY = 1.0 - slot.rect.minY - slot.rect.height
             let gap: CGFloat = 3
             let slotRect = CGRect(
@@ -429,5 +495,60 @@ final class TemplateCardView: NSView {
         let str   = NSAttributedString(string: template.name, attributes: attrs)
         let size  = str.size()
         str.draw(at: CGPoint(x: (bounds.width - size.width) / 2, y: 7))
+    }
+}
+
+// MARK: - WorkspaceChipView
+
+final class WorkspaceChipView: NSView {
+    let workspace: WorkspacePreset
+    var onActivate: (() -> Void)?
+
+    private var isHovered = false
+    private var trackingArea: NSTrackingArea?
+
+    init(workspace: WorkspacePreset) {
+        self.workspace = workspace
+        super.init(frame: .zero)
+        wantsLayer = true
+        translatesAutoresizingMaskIntoConstraints = false
+        heightAnchor.constraint(equalToConstant: 30).isActive = true
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { return true }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let old = trackingArea { removeTrackingArea(old) }
+        trackingArea = NSTrackingArea(rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self, userInfo: nil)
+        addTrackingArea(trackingArea!)
+    }
+
+    override func mouseEntered(with event: NSEvent) { isHovered = true;  needsDisplay = true }
+    override func mouseExited(with event: NSEvent)  { isHovered = false; needsDisplay = true }
+    override func mouseDown(with event: NSEvent)    { onActivate?() }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let bg = NSColor.white.withAlphaComponent(isHovered ? 0.18 : 0.10)
+        bg.setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: 8, yRadius: 8).fill()
+
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 12, weight: .medium),
+            .foregroundColor: NSColor.white.withAlphaComponent(0.82)
+        ]
+        let str = NSAttributedString(string: workspace.name, attributes: attrs)
+        let size = str.size()
+        str.draw(at: CGPoint(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2))
+    }
+
+    override var intrinsicContentSize: NSSize {
+        let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 12, weight: .medium)]
+        let w = workspace.name.size(withAttributes: attrs).width
+        return NSSize(width: w + 24, height: 30)
     }
 }

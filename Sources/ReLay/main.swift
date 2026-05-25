@@ -118,6 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(killSwitchItem)
 
         menu.addItem(NSMenuItem(title: "Undo Last Layout", action: #selector(undoLayout), keyEquivalent: "z"))
+        menu.addItem(NSMenuItem(title: "Shuffle Layout Windows", action: #selector(shuffleLayout), keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit ReLay", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
 
@@ -125,8 +126,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openExpose() {
-        guard let frontmost = getFrontmostWindow() else { return }
-        LayoutExposeController.shared.present(triggerWindow: frontmost)
+        LayoutExposeController.shared.present(triggerWindow: getFrontmostWindow())
     }
 
     @objc private func openPreferences() {
@@ -139,6 +139,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func undoLayout() {
         SpatialTransitionEngine.shared.performExposeUndo()
+    }
+
+    @objc private func shuffleLayout() {
+        SpatialTransitionEngine.shared.shuffleExposeLayout()
     }
 
     @objc private func toggleInterception() {
@@ -170,6 +174,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 extension AppDelegate: NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         menu.item(withTitle: "Undo Last Layout")?.isEnabled = SpatialTransitionEngine.shared.canUndo
+        menu.item(withTitle: "Shuffle Layout Windows")?.isEnabled = SpatialTransitionEngine.shared.canShuffle
     }
 }
 

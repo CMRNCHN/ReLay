@@ -30,8 +30,10 @@ public final class SpatialTransitionEngine {
     private var isInTiledMode: Bool { !tiledEntries.isEmpty }
     
     private var lastExposeUndoFrames: [WindowID: CGRect]?
+    private var lastExposeState: (template: LayoutTemplate, windows: [AXUIElement], screenFrame: CGRect)?
 
     public var canUndo: Bool { lastExposeUndoFrames != nil }
+    public var canShuffle: Bool { (lastExposeState?.windows.count ?? 0) >= 2 }
     
     private init() {
         AppLogger.log("spatial transition engine initialized", subsystem: "transition")
@@ -221,6 +223,34 @@ public final class SpatialTransitionEngine {
         LayoutExposeController.shared.present(triggerWindow: triggerWindow)
     }
     
+    func registerExposeState(template: LayoutTemplate, windows: [AXUIElement], screenFrame: CGRect) {
+        lastExposeState = (template, windows, screenFrame)
+    }
+
+    public func shuffleExposeLayout() {
+        guard let state = lastExposeState, state.windows.count >= 2 else { return }
+        let template = state.template
+        var windows = state.windows
+        let screenFrame = state.screenFrame
+        AppLogger.log("shuffling expose layout windows=\(windows.count)", subsystem: "transition")
+
+        var origFrames: [AXUIElement: CGRect] = [:]
+        for w in windows {
+            if let f = animator.getWindowFrame(w) { origFrames[w] = f }
+        }
+        registerExposeUndo(frames: origFrames)
+
+        let last = windows.removeLast()
+        windows.insert(last, at: 0)
+
+        for (idx, slot) in template.slots.enumerated() where idx < windows.count {
+            let target = template.frame(for: slot, in: screenFrame)
+            animator.animateWindowFrame(windows[idx], to: target)
+        }
+
+        lastExposeState = (template, windows, screenFrame)
+    }
+
     func registerExposeUndo(frames: [AXUIElement: CGRect]) {
         var undoMap: [WindowID: CGRect] = [:]
         for (window, frame) in frames {
