@@ -2,11 +2,11 @@
 
 ## Task Title
 
-Phase 1 + Phase 2 (partial): semantic-core tests + gesture ingress improvements
+Settings rework + new settings + Phase 3 runtime observability
 
 ## Request Date
 
-2026-05-20
+2026-05-28
 
 ## Status
 
@@ -14,60 +14,90 @@ Completed
 
 ## Objective
 
-Harden the semantic core with automated test coverage and advance gesture ingress
-stabilization toward the five-app target matrix.
+Rework the Settings UI to be understandable by non-technical users, add new behavior
+settings (snap speed, haptics, center snap, configurable swipe actions), and add
+per-gesture correlation IDs to all log lines (Phase 3 observability).
 
 ## Work Done
 
-### Phase 1 — Semantic Core Tests (complete)
+### Settings Rework — `Sources/ReLay/SettingsWindow.swift`
 
-Added `Tests/ReLayCoreTests/SemanticCoreTests.swift` with three suites:
+Complete rewrite of the settings UI:
 
-- `TransitionGraphTests` — 34 tests covering every edge in `LayoutTransitionGraph`,
-  including cross-column sixth jumps, vertical subdivision, and edge-resistance nil cases.
-- `LayoutResolverTests` — 21 tests covering geometry for all named states, inference
-  round-trips, unknown/zero-frame fallback to `.floating`, and interpolation clamping.
-- `WindowRecordTests` — 7 tests covering state transitions, rewind, history cap at 12,
-  and floatingFrame preservation across transitions.
+- Renamed all four existing settings to plain-English titles with human-readable
+  descriptions. Removed raw unit labels ("pt", "pt/s"). Added semantic endpoint labels
+  below each slider track (e.g. `Responsive ←→ Deliberate`).
+- Added "Feel" preset strip (Careful / Balanced / Snappy) as a segmented control at the
+  top of the panel — sets all five sliders at once.
+- Added **Snap Speed** slider (0.08–0.45s, `snapDuration` key, Instant ←→ Smooth).
+- Added **Snap Haptics** toggle (`snapHapticsEnabled` Bool, on by default).
+- Added **Center Snap** toggle (`centerSnapEnabled` Bool, off by default) — routes
+  floating-window horizontal swipes to center before halves.
+- Added **Swipe Actions** row with two `NSPopUpButton`s for configuring up-swipe and
+  down-swipe behavior independently (Fullscreen/Minimize/Center/Nothing).
+- Window height expanded to 620px with `NSScrollView` wrapper.
 
-Total test count: 10 → 72. All passing.
+### Core Settings Wiring
 
-### Phase 2 — TitleBarInterceptor ingress fixes (partial)
+- Added `Sources/ReLayCore/ReLaySettings.swift` — centralized UserDefaults accessors.
+- `LayoutOrchestrator.swift` — animation duration reads from `snapDuration` UserDefault.
+- `GestureEngine.swift` — all 3 haptic sites gated on `ReLaySettings.hapticsEnabled`.
+- `SpatialTransitionEngine.swift` — all 2 haptic sites gated; up/down swipe dispatched
+  to `executeUpSwipeAction`/`executeDownSwipeAction` which read UserDefaults; added
+  `executeTransitionTo(_:window:)` for direct-state snaps; graph re-instantiated on
+  `ReLaySettingsChanged` to pick up `centerSnapEnabled`.
+- `WindowLayoutState.swift` — `LayoutTransitionGraph.init(centerSnap:)` parameter added;
+  when `centerSnap == true`, `floating → center` replaces `floating → leftHalf/rightHalf`.
 
-Fixed `ChromeSignals` in `TitleBarInterceptor.swift`:
+### Phase 3 — Per-gesture Correlation IDs
 
-- Added `tabbed-toolbar` variant for apps that expose both AXTabGroup and AXToolbar
-  (Safari, Chrome, Xcode). Previous code returned 44px topBandHeight for any app with
-  tabs regardless of whether a toolbar was also present; now returns 80px for the
-  combined case.
-- `tabbed`-only variant (Terminal) still uses 44px.
-- Added `bundleID(for:)` helper.
-- All miss log lines now include `bundle=<id>` and `topBand=<px>` for per-app calibration.
+Every log line for a single gesture now shares an 8-char prefix of a `UUID`:
 
-Created `.ai/REPODOCK/CONTEXT/GESTURE_INGRESS_MATRIX.md` — reference table documenting
-expected variant, topBandHeight, and risk points for each target app, plus a live-log
-characterization guide.
+- `TitleBarInterceptor.swift` — UUID created at hit-accept (`pendingGestureID`), logged
+  on the `title bar hit` line, passed to the delegate via the updated protocol signature
+  `gestureDidBegin(on:at:fingerCount:shiftHeld:gestureID:)`.
+- `GestureEngine.swift` — stores `currentGestureID` from the protocol callback; passes
+  it to `SpatialTransitionEngine.beginSession(window:fingerCount:at:gestureID:)`; logs
+  it on begin and commit.
+- `SpatialTransitionEngine.swift` — stores `currentGestureID`; logs `gesture=` prefix
+  on all key lines: begin, commit, cancel, state transitions, enlarge, minimize, and
+  direct-state transitions.
+
+Log format example for one gesture:
+```
+[interceptor] title bar hit gesture=a3f82c1b ...
+[gesture]     gesture began gesture=a3f82c1b ...
+[gesture]     gesture committed gesture=a3f82c1b ...
+[transition]  transition request gesture=a3f82c1b ...
+[transition]  state transition gesture=a3f82c1b floating -> leftHalf
+[transition]  layout resolution gesture=a3f82c1b state=leftHalf
+```
 
 ## Architecture Boundaries Touched
 
-- `TitleBarInterceptor` — chrome signal classification and diagnostic logging
-- test target only (new file)
-- REPODOCK context docs
+- `Sources/ReLay/SettingsWindow.swift`
+- `Sources/ReLayCore/ReLaySettings.swift` (new file)
+- `Sources/ReLayCore/LayoutOrchestrator.swift`
+- `Sources/ReLayCore/GestureEngine.swift`
+- `Sources/ReLayCore/SpatialTransitionEngine.swift`
+- `Sources/ReLayCore/TitleBarInterceptor.swift`
+- `Sources/ReLayCore/WindowLayoutState.swift`
 
-## Behavior Changes
+## Build / Test Status
 
-- Two-finger gestures in the combined tab+toolbar region of Safari and Xcode will now
-  be accepted where they previously triggered geometric misses.
-- Logs now emit `bundle=` and `topBand=` on every outcome, enabling per-app diagnostics.
+- `swift build`: passing
+- `swift test`: 70 passing, 0 failures
 
 ## Risks / Follow-Ups
 
-- Live verification still needed across all five target apps.
-- Xcode's toolbar height on large displays may exceed 80px — check logs if misses persist.
-- System Settings content-ownership behavior is correct but should be confirmed on device.
+- Live gesture matrix verification (Finder, Safari, Terminal, Xcode, System Settings)
+  still pending — run ReLay and collect logs per GESTURE_INGRESS_MATRIX.md.
+- Xcode topBand may still need a bump to 96px if geometric misses appear on large displays.
+- Scenario tests reference `testNeutralStatesGoLeftToLeftHalf` and
+  `testNeutralStatesGoRightToRightHalf` — these test the default (centerSnap=false) path
+  and continue to pass. A matching `centerSnap=true` test suite would be a good addition.
 
 ## Next Task Recommendation
 
-Run ReLay against the five-app matrix (Finder, Safari, Terminal, Xcode, Settings),
-collect logs, and fill in the verification-status table in GESTURE_INGRESS_MATRIX.md.
-Then proceed to Phase 3 (runtime observability — per-gesture correlation IDs).
+1. Run ReLay on device and verify gesture matrix against GESTURE_INGRESS_MATRIX.md.
+2. Add scenario tests for `centerSnap=true` graph behavior.

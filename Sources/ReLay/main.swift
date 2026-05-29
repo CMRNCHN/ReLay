@@ -39,12 +39,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func checkAccessibilityAndStart() {
-        let accessibilityReady = AccessibilityBootstrap.ensurePermission(promptIfNeeded: false)
-
-        if accessibilityReady {
+        if AccessibilityBootstrap.isGranted() {
             startInterceptor()
+            updateMenuBarIcon(permitted: true)
         } else {
-            showAccessibilityAlert()
+            showAccessibilityPrompt()
         }
     }
 
@@ -69,32 +68,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func showAccessibilityAlert() {
-        if AXIsProcessTrusted() {
-            startInterceptor()
-            return
-        }
+    // MARK: - Accessibility permission flow
+
+    private func showAccessibilityPrompt() {
+        updateMenuBarIcon(permitted: false)
+
+        // Register with the system's accessibility list (shows the toggle in Settings)
+        AccessibilityBootstrap.requestPermission()
 
         let alert = NSAlert()
-        alert.messageText = "Accessibility Permissions Required"
-        alert.informativeText = "ReLay needs Accessibility permissions to intercept title bar gestures and manage your windows.\n\nPlease grant permission in System Settings > Privacy & Security > Accessibility and then click 'Check Again'."
-        alert.addButton(withTitle: "Open System Settings")
-        alert.addButton(withTitle: "Check Again")
+        alert.messageText = "Accessibility Access Required"
+        alert.informativeText = """
+            ReLay needs Accessibility access to intercept title-bar gestures and move windows.
+
+            1. Click "Open Settings" below
+            2. Find ReLay in the list and turn it ON
+            3. ReLay will start automatically — no need to do anything else
+            """
+        alert.addButton(withTitle: "Open Settings")
         alert.addButton(withTitle: "Quit")
 
         let response = alert.runModal()
         if response == .alertFirstButtonReturn {
-            let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
-            NSWorkspace.shared.open(url)
-            // Wait for user to interact with Settings then check again manually
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                self.showAccessibilityAlert()
+            openAccessibilitySettings()
+            // Start polling — will auto-start the interceptor the moment permission is granted
+            AccessibilityBootstrap.startPolling { [weak self] in
+                self?.startInterceptor()
+                self?.updateMenuBarIcon(permitted: true)
+                self?.showGrantedNotification()
             }
-        } else if response == .alertSecondButtonReturn {
-            checkAccessibilityAndStart()
         } else {
             NSApplication.shared.terminate(nil)
         }
+    }
+
+    private func openAccessibilitySettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    private func showGrantedNotification() {
+        let alert = NSAlert()
+        alert.messageText = "ReLay is Active"
+        alert.informativeText = "Accessibility access granted. ReLay is now intercepting title-bar gestures."
+        alert.addButton(withTitle: "Got it")
+        alert.runModal()
+    }
+
+    private func updateMenuBarIcon(permitted: Bool) {
+        let symbolName = permitted
+            ? "rectangle.3.group"
+            : "rectangle.3.group.badge.minus"
+        statusItem?.button?.image = NSImage(systemSymbolName: symbolName,
+                                            accessibilityDescription: "ReLay")
+        statusItem?.button?.toolTip = permitted
+            ? "ReLay — active"
+            : "ReLay — accessibility access required"
     }
 
     func applicationWillTerminate(_ notification: Notification) {

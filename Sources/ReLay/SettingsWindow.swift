@@ -3,16 +3,17 @@ import Foundation
 
 final class SettingsWindowController: NSWindowController {
 
-    // MARK: - Definitions
+    // MARK: - Slider Setting Definition
 
-    private struct Setting {
+    private struct SliderSetting {
         let key: String
         let title: String
         let description: String
         let min: Double
         let max: Double
         let defaultValue: Double
-        let unit: String
+        let endpointMin: String
+        let endpointMax: String
 
         var stored: Double {
             let v = UserDefaults.standard.double(forKey: key)
@@ -20,43 +21,69 @@ final class SettingsWindowController: NSWindowController {
         }
     }
 
-    private let settings: [Setting] = [
-        Setting(
+    private let sliderSettings: [SliderSetting] = [
+        SliderSetting(
             key: "lockThreshold",
-            title: "Direction Lock",
-            description: "How far to move before Relay picks a direction. Lower = more responsive.",
-            min: 5, max: 50, defaultValue: 20, unit: "pt"
+            title: "Gesture Sensitivity",
+            description: "How quickly ReLay commits to a swipe direction.",
+            min: 5, max: 50, defaultValue: 20,
+            endpointMin: "Responsive", endpointMax: "Deliberate"
         ),
-        Setting(
+        SliderSetting(
             key: "cancelThreshold",
-            title: "Diagonal Forgiveness",
-            description: "How diagonal a swipe can be before Relay ignores it.",
-            min: 10, max: 60, defaultValue: 25, unit: "pt"
+            title: "Diagonal Tolerance",
+            description: "How much sideways drift is allowed before a swipe is ignored.",
+            min: 10, max: 60, defaultValue: 25,
+            endpointMin: "Strict", endpointMax: "Forgiving"
         ),
-        Setting(
+        SliderSetting(
             key: "actionThreshold",
-            title: "Snap Distance",
-            description: "How far to swipe before a window snaps into place.",
-            min: 30, max: 250, defaultValue: 100, unit: "pt"
+            title: "Swipe Distance",
+            description: "How far you need to swipe before a window moves.",
+            min: 30, max: 250, defaultValue: 100,
+            endpointMin: "Short swipe", endpointMax: "Long swipe"
         ),
-        Setting(
+        SliderSetting(
             key: "flickVelocity",
-            title: "Quick Flick Speed",
-            description: "Flick faster than this to snap instantly without reaching the full distance.",
-            min: 200, max: 2000, defaultValue: 800, unit: "pt/s"
-        )
+            title: "Flick Sensitivity",
+            description: "How fast a flick must be to snap a window without a full swipe.",
+            min: 200, max: 2000, defaultValue: 800,
+            endpointMin: "Easy flick", endpointMax: "Hard flick"
+        ),
+        SliderSetting(
+            key: "snapDuration",
+            title: "Snap Speed",
+            description: "How fast windows animate into position.",
+            min: 0.08, max: 0.45, defaultValue: 0.22,
+            endpointMin: "Instant", endpointMax: "Smooth"
+        ),
+    ]
+
+    private struct Preset {
+        let label: String
+        let values: [String: Double]
+    }
+
+    private let presets: [Preset] = [
+        Preset(label: "Careful",  values: ["lockThreshold": 35, "cancelThreshold": 45, "actionThreshold": 160, "flickVelocity": 1400, "snapDuration": 0.35]),
+        Preset(label: "Balanced", values: ["lockThreshold": 20, "cancelThreshold": 25, "actionThreshold": 100, "flickVelocity": 800,  "snapDuration": 0.22]),
+        Preset(label: "Snappy",   values: ["lockThreshold": 8,  "cancelThreshold": 12, "actionThreshold": 45,  "flickVelocity": 350,  "snapDuration": 0.10]),
     ]
 
     // MARK: - State
 
     private var sliders: [NSSlider] = []
-    private var valueLabels: [NSTextField] = []
+    private var presetControl: NSSegmentedControl?
+    private var hapticsSwitch: NSSwitch?
+    private var centerSnapSwitch: NSSwitch?
+    private var upSwipePopup: NSPopUpButton?
+    private var downSwipePopup: NSPopUpButton?
 
     // MARK: - Init
 
     convenience init() {
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 460, height: 410),
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 620),
             styleMask: [.titled, .closable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -80,118 +107,308 @@ final class SettingsWindowController: NSWindowController {
         fx.state = .active
         window.contentView = fx
 
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.drawsBackground = false
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        fx.addSubview(scroll)
+        NSLayoutConstraint.activate([
+            scroll.topAnchor.constraint(equalTo: fx.topAnchor),
+            scroll.leadingAnchor.constraint(equalTo: fx.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: fx.trailingAnchor),
+            scroll.bottomAnchor.constraint(equalTo: fx.bottomAnchor),
+        ])
+
         let outer = NSStackView()
         outer.orientation = .vertical
         outer.spacing = 0
         outer.edgeInsets = NSEdgeInsets(top: 52, left: 28, bottom: 24, right: 28)
         outer.translatesAutoresizingMaskIntoConstraints = false
-        fx.addSubview(outer)
+        scroll.documentView = outer
         NSLayoutConstraint.activate([
-            outer.topAnchor.constraint(equalTo: fx.topAnchor),
-            outer.leadingAnchor.constraint(equalTo: fx.leadingAnchor),
-            outer.trailingAnchor.constraint(equalTo: fx.trailingAnchor),
-            outer.bottomAnchor.constraint(equalTo: fx.bottomAnchor)
+            outer.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
+            outer.trailingAnchor.constraint(equalTo: scroll.contentView.trailingAnchor),
         ])
 
-        for (i, setting) in settings.enumerated() {
-            if i > 0 {
-                let sep = NSBox()
-                sep.boxType = .separator
-                outer.addArrangedSubview(sep)
-                outer.setCustomSpacing(0, after: sep)
-            }
-            let row = buildRow(for: setting, index: i)
+        // Preset strip
+        let seg = NSSegmentedControl(labels: presets.map { $0.label }, trackingMode: .selectOne, target: self, action: #selector(presetSelected(_:)))
+        seg.selectedSegment = 1 // Balanced
+        presetControl = seg
+        outer.addArrangedSubview(seg)
+        outer.setCustomSpacing(20, after: seg)
+
+        // Slider rows
+        for (i, setting) in sliderSettings.enumerated() {
+            let sep = NSBox(); sep.boxType = .separator
+            outer.addArrangedSubview(sep)
+            outer.setCustomSpacing(0, after: sep)
+            let row = buildSliderRow(for: setting, index: i)
             outer.addArrangedSubview(row)
             outer.setCustomSpacing(0, after: row)
         }
 
+        // Section: Behavior toggles
+        let sep1 = NSBox(); sep1.boxType = .separator
+        outer.addArrangedSubview(sep1)
+        outer.setCustomSpacing(16, after: sep1)
+
+        outer.addArrangedSubview(buildToggleRow(
+            title: "Snap Haptics",
+            description: "Feel a click when a window snaps into place.",
+            key: "snapHapticsEnabled",
+            defaultOn: true,
+            switchRef: { [weak self] sw in self?.hapticsSwitch = sw }
+        ))
+        outer.setCustomSpacing(12, after: outer.arrangedSubviews.last!)
+
+        outer.addArrangedSubview(buildToggleRow(
+            title: "Center Snap",
+            description: "Swipe left or right from an unmanaged window to land in the center first.",
+            key: "centerSnapEnabled",
+            defaultOn: false,
+            switchRef: { [weak self] sw in self?.centerSnapSwitch = sw }
+        ))
+        outer.setCustomSpacing(16, after: outer.arrangedSubviews.last!)
+
+        // Swipe Actions
+        let sep2 = NSBox(); sep2.boxType = .separator
+        outer.addArrangedSubview(sep2)
+        outer.setCustomSpacing(16, after: sep2)
+        outer.addArrangedSubview(buildSwipeActionsRow())
+        outer.setCustomSpacing(20, after: outer.arrangedSubviews.last!)
+
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .vertical)
         outer.addArrangedSubview(spacer)
+        outer.setCustomSpacing(12, after: spacer)
 
         let resetBtn = NSButton(title: "Reset to Defaults", target: self, action: #selector(resetAll))
         resetBtn.bezelStyle = .rounded
         resetBtn.font = .systemFont(ofSize: 13)
         outer.addArrangedSubview(resetBtn)
-        outer.setCustomSpacing(12, after: spacer)
     }
 
-    private func buildRow(for setting: Setting, index: Int) -> NSView {
+    private func buildSliderRow(for setting: SliderSetting, index: Int) -> NSView {
         let container = NSView()
         container.translatesAutoresizingMaskIntoConstraints = false
-        container.heightAnchor.constraint(equalToConstant: 84).isActive = true
 
         let titleLabel = NSTextField(labelWithString: setting.title)
         titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
-        titleLabel.setContentHuggingPriority(.required, for: .horizontal)
 
-        let valueLbl = NSTextField(labelWithString: displayText(setting.stored, unit: setting.unit))
-        valueLbl.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-        valueLbl.textColor = .secondaryLabelColor
-        valueLbl.alignment = .right
-        valueLbl.setContentHuggingPriority(.required, for: .horizontal)
-        valueLabels.append(valueLbl)
+        let descLabel = NSTextField(labelWithString: setting.description)
+        descLabel.font = .systemFont(ofSize: 11)
+        descLabel.textColor = .tertiaryLabelColor
+        descLabel.lineBreakMode = .byWordWrapping
+        descLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let titleRow = NSStackView(views: [titleLabel, valueLbl])
-        titleRow.distribution = .fill
-        titleRow.spacing = 8
-
-        let slider = NSSlider(
-            value: setting.stored,
-            minValue: setting.min,
-            maxValue: setting.max,
-            target: self,
-            action: #selector(sliderChanged(_:))
-        )
+        let slider = NSSlider(value: setting.stored, minValue: setting.min, maxValue: setting.max, target: self, action: #selector(sliderChanged(_:)))
         slider.isContinuous = true
         slider.tag = index
         sliders.append(slider)
 
-        let desc = NSTextField(labelWithString: setting.description)
-        desc.font = .systemFont(ofSize: 11)
-        desc.textColor = .tertiaryLabelColor
-        desc.lineBreakMode = .byWordWrapping
-        desc.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let minLbl = NSTextField(labelWithString: setting.endpointMin)
+        minLbl.font = .systemFont(ofSize: 10)
+        minLbl.textColor = .quaternaryLabelColor
+        minLbl.setContentHuggingPriority(.required, for: .horizontal)
 
-        let stack = NSStackView(views: [titleRow, slider, desc])
+        let maxLbl = NSTextField(labelWithString: setting.endpointMax)
+        maxLbl.font = .systemFont(ofSize: 10)
+        maxLbl.textColor = .quaternaryLabelColor
+        maxLbl.alignment = .right
+        maxLbl.setContentHuggingPriority(.required, for: .horizontal)
+
+        let endpointRow = NSStackView(views: [minLbl, NSView(), maxLbl])
+        endpointRow.distribution = .fill
+        endpointRow.spacing = 4
+        (endpointRow.arrangedSubviews[1] as NSView).setContentHuggingPriority(.defaultLow, for: .horizontal)
+
+        let stack = NSStackView(views: [titleLabel, descLabel, slider, endpointRow])
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 5
+        stack.spacing = 4
         stack.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(stack)
 
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            stack.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-            titleRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            stack.topAnchor.constraint(equalTo: container.topAnchor, constant: 12),
+            stack.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -12),
             slider.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            desc.widthAnchor.constraint(equalTo: stack.widthAnchor)
+            endpointRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            descLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
         ])
+
+        return container
+    }
+
+    private func buildToggleRow(title: String, description: String, key: String, defaultOn: Bool, switchRef: (NSSwitch) -> Void) -> NSView {
+        let container = NSView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+
+        let titleLabel = NSTextField(labelWithString: title)
+        titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+
+        let descLabel = NSTextField(labelWithString: description)
+        descLabel.font = .systemFont(ofSize: 11)
+        descLabel.textColor = .tertiaryLabelColor
+        descLabel.lineBreakMode = .byWordWrapping
+        descLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        let sw = NSSwitch()
+        let storedObj = UserDefaults.standard.object(forKey: key)
+        sw.state = (storedObj == nil ? defaultOn : UserDefaults.standard.bool(forKey: key)) ? .on : .off
+        sw.target = self
+        sw.action = #selector(toggleChanged(_:))
+        sw.tag = key.hashValue
+        // Store key on the switch via identifier
+        sw.identifier = NSUserInterfaceItemIdentifier(key)
+        switchRef(sw)
+
+        let labelStack = NSStackView(views: [titleLabel, descLabel])
+        labelStack.orientation = .vertical
+        labelStack.alignment = .leading
+        labelStack.spacing = 2
+        labelStack.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        labelStack.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        let row = NSStackView(views: [labelStack, sw])
+        row.distribution = .fill
+        row.alignment = .centerY
+        row.spacing = 12
+        row.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(row)
+
+        NSLayoutConstraint.activate([
+            row.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            row.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            row.topAnchor.constraint(equalTo: container.topAnchor),
+            row.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            descLabel.widthAnchor.constraint(lessThanOrEqualTo: labelStack.widthAnchor),
+        ])
+
+        return container
+    }
+
+    private func buildSwipeActionsRow() -> NSView {
+        let header = NSTextField(labelWithString: "Swipe Actions")
+        header.font = .systemFont(ofSize: 13, weight: .semibold)
+
+        let descLabel = NSTextField(labelWithString: "What happens when you swipe up or down on a window title bar.")
+        descLabel.font = .systemFont(ofSize: 11)
+        descLabel.textColor = .tertiaryLabelColor
+        descLabel.lineBreakMode = .byWordWrapping
+        descLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        let upLabel = NSTextField(labelWithString: "↑  Up swipe")
+        upLabel.font = .systemFont(ofSize: 12)
+        upLabel.setContentHuggingPriority(.required, for: .horizontal)
+
+        let upPopup = NSPopUpButton()
+        upPopup.addItems(withTitles: ["Fullscreen", "Center", "Nothing"])
+        let upStored = UserDefaults.standard.string(forKey: "upSwipeAction") ?? "fullscreen"
+        switch upStored {
+        case "center":  upPopup.selectItem(withTitle: "Center")
+        case "nothing": upPopup.selectItem(withTitle: "Nothing")
+        default:        upPopup.selectItem(withTitle: "Fullscreen")
+        }
+        upPopup.target = self
+        upPopup.action = #selector(upSwipeChanged(_:))
+        upSwipePopup = upPopup
+
+        let downLabel = NSTextField(labelWithString: "↓  Down swipe")
+        downLabel.font = .systemFont(ofSize: 12)
+        downLabel.setContentHuggingPriority(.required, for: .horizontal)
+
+        let downPopup = NSPopUpButton()
+        downPopup.addItems(withTitles: ["Minimize", "Center", "Nothing"])
+        let downStored = UserDefaults.standard.string(forKey: "downSwipeAction") ?? "minimize"
+        switch downStored {
+        case "center":  downPopup.selectItem(withTitle: "Center")
+        case "nothing": downPopup.selectItem(withTitle: "Nothing")
+        default:        downPopup.selectItem(withTitle: "Minimize")
+        }
+        downPopup.target = self
+        downPopup.action = #selector(downSwipeChanged(_:))
+        downSwipePopup = downPopup
+
+        let upRow = NSStackView(views: [upLabel, upPopup])
+        upRow.spacing = 8
+        upRow.alignment = .centerY
+
+        let downRow = NSStackView(views: [downLabel, downPopup])
+        downRow.spacing = 8
+        downRow.alignment = .centerY
+
+        let popupStack = NSStackView(views: [upRow, downRow])
+        popupStack.orientation = .vertical
+        popupStack.alignment = .leading
+        popupStack.spacing = 8
+
+        let container = NSStackView(views: [header, descLabel, popupStack])
+        container.orientation = .vertical
+        container.alignment = .leading
+        container.spacing = 6
+        descLabel.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor).isActive = true
 
         return container
     }
 
     // MARK: - Actions
 
+    @objc private func presetSelected(_ seg: NSSegmentedControl) {
+        let preset = presets[seg.selectedSegment]
+        for (i, setting) in sliderSettings.enumerated() {
+            if let v = preset.values[setting.key] {
+                sliders[i].doubleValue = v
+                UserDefaults.standard.set(v, forKey: setting.key)
+            }
+        }
+        postSettingsChanged()
+    }
+
     @objc private func sliderChanged(_ slider: NSSlider) {
-        let i = slider.tag
-        let v = slider.doubleValue
-        valueLabels[i].stringValue = displayText(v, unit: settings[i].unit)
-        UserDefaults.standard.set(v, forKey: settings[i].key)
-        NotificationCenter.default.post(name: NSNotification.Name("ReLaySettingsChanged"), object: nil)
+        UserDefaults.standard.set(slider.doubleValue, forKey: sliderSettings[slider.tag].key)
+        presetControl?.selectedSegment = -1
+        postSettingsChanged()
+    }
+
+    @objc private func toggleChanged(_ sw: NSSwitch) {
+        guard let key = sw.identifier?.rawValue else { return }
+        UserDefaults.standard.set(sw.state == .on, forKey: key)
+        postSettingsChanged()
+    }
+
+    @objc private func upSwipeChanged(_ popup: NSPopUpButton) {
+        let map = ["Fullscreen": "fullscreen", "Center": "center", "Nothing": "nothing"]
+        UserDefaults.standard.set(map[popup.titleOfSelectedItem ?? ""] ?? "fullscreen", forKey: "upSwipeAction")
+        postSettingsChanged()
+    }
+
+    @objc private func downSwipeChanged(_ popup: NSPopUpButton) {
+        let map = ["Minimize": "minimize", "Center": "center", "Nothing": "nothing"]
+        UserDefaults.standard.set(map[popup.titleOfSelectedItem ?? ""] ?? "minimize", forKey: "downSwipeAction")
+        postSettingsChanged()
     }
 
     @objc private func resetAll() {
-        for (i, setting) in settings.enumerated() {
+        for (i, setting) in sliderSettings.enumerated() {
             sliders[i].doubleValue = setting.defaultValue
-            valueLabels[i].stringValue = displayText(setting.defaultValue, unit: setting.unit)
             UserDefaults.standard.set(setting.defaultValue, forKey: setting.key)
         }
-        NotificationCenter.default.post(name: NSNotification.Name("ReLaySettingsChanged"), object: nil)
+        hapticsSwitch?.state = .on
+        UserDefaults.standard.set(true, forKey: "snapHapticsEnabled")
+        centerSnapSwitch?.state = .off
+        UserDefaults.standard.set(false, forKey: "centerSnapEnabled")
+        upSwipePopup?.selectItem(withTitle: "Fullscreen")
+        UserDefaults.standard.set("fullscreen", forKey: "upSwipeAction")
+        downSwipePopup?.selectItem(withTitle: "Minimize")
+        UserDefaults.standard.set("minimize", forKey: "downSwipeAction")
+        presetControl?.selectedSegment = 1
+        postSettingsChanged()
     }
 
-    private func displayText(_ v: Double, unit: String) -> String {
-        "\(Int(v)) \(unit)"
+    private func postSettingsChanged() {
+        NotificationCenter.default.post(name: NSNotification.Name("ReLaySettingsChanged"), object: nil)
     }
 }

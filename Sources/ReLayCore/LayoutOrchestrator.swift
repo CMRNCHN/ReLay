@@ -170,7 +170,13 @@ class LayoutOrchestrator {
 
     // MARK: - Spring Animation
 
-    func animateWindowFrame(_ window: AXUIElement, to target: CGRect, duration: TimeInterval = 0.220) {
+    private var snapDuration: TimeInterval {
+        let v = UserDefaults.standard.double(forKey: "snapDuration")
+        return v > 0 ? v : 0.220
+    }
+
+    func animateWindowFrame(_ window: AXUIElement, to target: CGRect, duration: TimeInterval? = nil) {
+        let duration = duration ?? snapDuration
         let id = WindowID(element: window)
         activeAnimations[id]?.invalidate()
 

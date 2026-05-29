@@ -10,7 +10,7 @@ import Accessibility
 public final class SpatialTransitionEngine {
     public static let shared = SpatialTransitionEngine()
 
-    private let graph    = LayoutTransitionGraph()
+    private var graph    = LayoutTransitionGraph(centerSnap: ReLaySettings.centerSnapEnabled)
     private let store    = WindowStateStore.shared
     private let resolver = LayoutResolver.shared
     private let animator = LayoutOrchestrator.shared
@@ -25,6 +25,7 @@ public final class SpatialTransitionEngine {
 
     // MARK: - Multi-window Layout State
 
+    private var currentGestureID: UUID = UUID()
     private var tiledEntries: [(window: AXUIElement, original: CGRect)] = []
     private var stageManagerWasEnabled: Bool = false
     private var isInTiledMode: Bool { !tiledEntries.isEmpty }
@@ -37,12 +38,20 @@ public final class SpatialTransitionEngine {
     
     private init() {
         AppLogger.log("spatial transition engine initialized", subsystem: "transition")
+        NotificationCenter.default.addObserver(
+            forName: NSNotification.Name("ReLaySettingsChanged"),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.graph = LayoutTransitionGraph(centerSnap: ReLaySettings.centerSnapEnabled)
+        }
     }
 
     // MARK: - Gesture Session Lifecycle
 
-    func beginSession(window: AXUIElement, fingerCount: Int, at location: CGPoint) {
-        AppLogger.log("session begin fingers=\(fingerCount)", subsystem: "transition")
+    func beginSession(window: AXUIElement, fingerCount: Int, at location: CGPoint, gestureID: UUID = UUID()) {
+        currentGestureID = gestureID
+        AppLogger.log("session begin gesture=\(gestureID.uuidString.prefix(8)) fingers=\(fingerCount)", subsystem: "transition")
         sessionWindow        = window
         sessionFingerCount   = fingerCount
         sessionStartLocation = location
@@ -92,7 +101,7 @@ public final class SpatialTransitionEngine {
         guard let window = sessionWindow else { return }
         let direction = GestureDirection(effectiveX: effectiveX, effectiveY: effectiveY)
         AppLogger.log(
-            "transition request fingers=\(fingerCount) direction=\(direction.map { String(describing: $0) } ?? "none")",
+            "transition request gesture=\(currentGestureID.uuidString.prefix(8)) fingers=\(fingerCount) direction=\(direction.map { String(describing: $0) } ?? "none")",
             subsystem: "transition"
         )
 
@@ -112,9 +121,9 @@ public final class SpatialTransitionEngine {
             guard let dir = direction else { cancelSession(); return }
             switch dir {
             case .up:
-                executeEnlarge(window: window)
+                executeUpSwipeAction(window: window)
             case .down:
-                executeMinimize(window: window)
+                executeDownSwipeAction(window: window)
             case .left, .right:
                 executeStateTransition(direction: dir, for: window)
             }
@@ -123,7 +132,7 @@ public final class SpatialTransitionEngine {
 
     func cancelSession() {
         defer { clearSession() }
-        AppLogger.log("transition session cancelled", subsystem: "transition")
+        AppLogger.log("transition session cancelled gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "transition")
         guard let window = sessionWindow, !sessionStartFrame.isEmpty else {
             PreviewManager.shared.dismiss(animated: true)
             return
@@ -166,14 +175,14 @@ public final class SpatialTransitionEngine {
         let currentState = record.currentState
 
         guard let nextState = graph.nextState(from: currentState, moving: direction) else {
-            AppLogger.log("no transition available from=\(currentState) direction=\(direction)", subsystem: "transition")
+            AppLogger.log("no transition available gesture=\(currentGestureID.uuidString.prefix(8)) from=\(currentState) direction=\(direction)", subsystem: "transition")
             // Edge of the graph — snap back
             animator.animateWindowFrame(window, to: sessionStartFrame, duration: 0.120)
             PreviewManager.shared.dismiss(animated: true)
             return
         }
 
-        AppLogger.log("state transition request \(currentState) -> \(nextState)", subsystem: "transition")
+        AppLogger.log("state transition gesture=\(currentGestureID.uuidString.prefix(8)) \(currentState) -> \(nextState)", subsystem: "transition")
 
         // Capture floating frame before first managed placement
         if currentState == .floating, record.floatingFrame == nil {
@@ -183,7 +192,7 @@ public final class SpatialTransitionEngine {
         record.transition(to: nextState)
         store.setRecord(record, for: window)
 
-        AppLogger.log("layout resolution request state=\(nextState)", subsystem: "transition")
+        AppLogger.log("layout resolution gesture=\(currentGestureID.uuidString.prefix(8)) state=\(nextState)", subsystem: "transition")
         let targetFrame = targetFrame(for: nextState, window: window, screen: sessionScreenFrame)
 
         PreviewManager.shared.commitOverlay(finalFrame: targetFrame)
@@ -193,7 +202,7 @@ public final class SpatialTransitionEngine {
     // MARK: - 2-finger Vertical Actions
 
     private func executeEnlarge(window: AXUIElement) {
-        AppLogger.log("transition request enlarge", subsystem: "transition")
+        AppLogger.log("transition request enlarge gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "transition")
         let screen = sessionScreenFrame != .zero ? sessionScreenFrame : animator.getUsableScreenFrame(for: window)
         let target = resolver.frame(for: .fullscreen, on: screen)
 
@@ -203,16 +212,46 @@ public final class SpatialTransitionEngine {
             store.setRecord(record, for: window)
         }
 
-        NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
+        if ReLaySettings.hapticsEnabled { NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now) }
         PreviewManager.shared.commitOverlay(finalFrame: target)
         animator.animateWindowFrame(window, to: target)
     }
 
     private func executeMinimize(window: AXUIElement) {
-        AppLogger.log("transition request minimize window", subsystem: "transition")
-        NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
+        AppLogger.log("transition request minimize gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "transition")
+        if ReLaySettings.hapticsEnabled { NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now) }
         PreviewManager.shared.dismiss(animated: false)
         AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanTrue)
+    }
+
+    private func executeTransitionTo(_ state: WindowLayoutState, window: AXUIElement) {
+        AppLogger.log("transition request direct gesture=\(currentGestureID.uuidString.prefix(8)) state=\(state)", subsystem: "transition")
+        let screen = sessionScreenFrame != .zero ? sessionScreenFrame : animator.getUsableScreenFrame(for: window)
+        let target = targetFrame(for: state, window: window, screen: screen)
+        if var record = store.record(for: window) {
+            if record.floatingFrame == nil { record.floatingFrame = sessionStartFrame }
+            record.transition(to: state)
+            store.setRecord(record, for: window)
+        }
+        if ReLaySettings.hapticsEnabled { NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now) }
+        PreviewManager.shared.commitOverlay(finalFrame: target)
+        animator.animateWindowFrame(window, to: target)
+    }
+
+    private func executeUpSwipeAction(window: AXUIElement) {
+        switch ReLaySettings.upSwipeAction {
+        case .center:   executeTransitionTo(.center, window: window)
+        case .nothing:  cancelSession()
+        default:        executeEnlarge(window: window)
+        }
+    }
+
+    private func executeDownSwipeAction(window: AXUIElement) {
+        switch ReLaySettings.downSwipeAction {
+        case .center:   executeTransitionTo(.center, window: window)
+        case .nothing:  cancelSession()
+        default:        executeMinimize(window: window)
+        }
     }
 
     // MARK: - Multi-window Operations

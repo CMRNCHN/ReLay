@@ -4,7 +4,7 @@ import Accessibility
 
 /// Delegate protocol to pass clean gesture lifecycle events to the Gesture Engine.
 public protocol TitleBarInterceptorDelegate: AnyObject {
-    func gestureDidBegin(on window: AXUIElement, at location: CGPoint, fingerCount: Int, shiftHeld: Bool)
+    func gestureDidBegin(on window: AXUIElement, at location: CGPoint, fingerCount: Int, shiftHeld: Bool, gestureID: UUID)
     func gestureDidChange(deltaX: CGFloat, deltaY: CGFloat, velocity: CGFloat)
     func gestureDidEnd()
     func gestureDidCancel()
@@ -125,6 +125,7 @@ public final class TitleBarInterceptor {
     private var lastKnownTouchCount: Int = 2
     private var isTracking3Finger = false
     private var accumulated3FingerY: CGFloat = 0
+    private var pendingGestureID: UUID = UUID()
 
     // Configuration
     public init() {}
@@ -299,8 +300,8 @@ public final class TitleBarInterceptor {
                 isTrackingGesture = true
                 activeTargetWindow = window
                 let shiftHeld = NSEvent.modifierFlags.contains(.shift)
-                AppLogger.log("title bar hit; beginning gesture tracking fingers=\(lastKnownTouchCount) shift=\(shiftHeld)", subsystem: "interceptor")
-                delegate?.gestureDidBegin(on: window, at: location, fingerCount: lastKnownTouchCount, shiftHeld: shiftHeld)
+                AppLogger.log("title bar hit; beginning gesture tracking fingers=\(lastKnownTouchCount) shift=\(shiftHeld) gesture=\(pendingGestureID.uuidString.prefix(8))", subsystem: "interceptor")
+                delegate?.gestureDidBegin(on: window, at: location, fingerCount: lastKnownTouchCount, shiftHeld: shiftHeld, gestureID: pendingGestureID)
                 
                 // Swallow the event to prevent underlying scroll
                 return nil 
@@ -403,10 +404,12 @@ public final class TitleBarInterceptor {
 
         switch qualification {
         case .accepted(let reason):
+            let gestureID = UUID()
             AppLogger.log(
-                "title bar hit app=\(owner) bundle=\(bundleId) variant=\(signals.variant) topBand=\(Int(signals.topBandHeight)) hitRole=\(signals.hitRole) via \(reason)",
+                "title bar hit gesture=\(gestureID.uuidString.prefix(8)) app=\(owner) bundle=\(bundleId) variant=\(signals.variant) topBand=\(Int(signals.topBandHeight)) hitRole=\(signals.hitRole) via \(reason)",
                 subsystem: "interceptor"
             )
+            pendingGestureID = gestureID
             return window
         case .semanticMiss(let reason):
             AppLogger.log(

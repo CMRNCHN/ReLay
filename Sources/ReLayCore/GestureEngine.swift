@@ -33,10 +33,11 @@ public final class GestureEngine: TitleBarInterceptorDelegate {
     private var currentFingerCount: Int    = 2
     private var startLocation:     CGPoint = .zero
     private var isShiftMode:       Bool    = false
+    private var currentGestureID:  UUID    = UUID()
 
     // MARK: - TitleBarInterceptorDelegate
 
-    public func gestureDidBegin(on window: AXUIElement, at location: CGPoint, fingerCount: Int, shiftHeld: Bool) {
+    public func gestureDidBegin(on window: AXUIElement, at location: CGPoint, fingerCount: Int, shiftHeld: Bool, gestureID: UUID) {
         axisLocked         = nil
         accumulatedX       = 0
         accumulatedY       = 0
@@ -44,8 +45,9 @@ public final class GestureEngine: TitleBarInterceptorDelegate {
         currentFingerCount = fingerCount
         startLocation      = location
         isShiftMode        = shiftHeld && fingerCount == 2
-        AppLogger.log("gesture began fingers=\(fingerCount) shiftMode=\(isShiftMode)", subsystem: "gesture")
-        SpatialTransitionEngine.shared.beginSession(window: window, fingerCount: fingerCount, at: location)
+        currentGestureID   = gestureID
+        AppLogger.log("gesture began gesture=\(gestureID.uuidString.prefix(8)) fingers=\(fingerCount) shiftMode=\(isShiftMode)", subsystem: "gesture")
+        SpatialTransitionEngine.shared.beginSession(window: window, fingerCount: fingerCount, at: location, gestureID: gestureID)
     }
 
     public func gestureDidDoubleTap(on window: AXUIElement) {}
@@ -64,6 +66,9 @@ public final class GestureEngine: TitleBarInterceptorDelegate {
 
         accumulatedX += deltaX
         accumulatedY += deltaY
+        if abs(accumulatedY) > 5 && axisLocked == nil {
+            AppLogger.log("deltaY accumulating: \(accumulatedY > 0 ? "positive" : "negative") (\(accumulatedY))", subsystem: "gesture")
+        }
 
         // Axis locking: one axis must dominate the other by 1.5× before we commit direction
         if axisLocked == nil {
@@ -71,11 +76,11 @@ public final class GestureEngine: TitleBarInterceptorDelegate {
             if absX > (thresholds["lockThreshold"] ?? 20.0) && absX > absY * 1.5 {
                 axisLocked = .horizontal
                 AppLogger.log("gesture axis locked horizontal", subsystem: "gesture")
-                NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
+                if ReLaySettings.hapticsEnabled { NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default) }
             } else if absY > (thresholds["lockThreshold"] ?? 20.0) && absY > absX * 1.5 {
                 axisLocked = .vertical
                 AppLogger.log("gesture axis locked vertical", subsystem: "gesture")
-                NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
+                if ReLaySettings.hapticsEnabled { NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default) }
             } else if max(absX, absY) > (thresholds["cancelThreshold"] ?? 25.0) {
                 // Diagonal movement beyond ambiguity window — cancel
                 AppLogger.log("gesture cancelled due to diagonal ambiguity", subsystem: "gesture")
@@ -157,10 +162,10 @@ public final class GestureEngine: TitleBarInterceptorDelegate {
         hasCommitted = true
         let direction = GestureDirection(effectiveX: effectiveX, effectiveY: effectiveY)
         AppLogger.log(
-            "gesture committed direction=\(direction.map { String(describing: $0) } ?? "none") fingers=\(currentFingerCount)",
+            "gesture committed gesture=\(currentGestureID.uuidString.prefix(8)) direction=\(direction.map { String(describing: $0) } ?? "none") fingers=\(currentFingerCount)",
             subsystem: "gesture"
         )
-        NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
+        if ReLaySettings.hapticsEnabled { NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now) }
         SpatialTransitionEngine.shared.commitSession(
             effectiveX:  effectiveX,
             effectiveY:  effectiveY,
