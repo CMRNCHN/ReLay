@@ -1,5 +1,38 @@
 import Foundation
 
+// MARK: - SavedLayout
+// A named layout that remembers specific apps per slot.
+// These appear as pinned cards in Layout Exposé.
+public struct SavedLayout: Codable, Identifiable {
+    public let id: UUID
+    public var name: String
+    public let templateID: String
+    /// slot index → bundle ID of the preferred app
+    public var slotBundleIDs: [Int: String]
+    public let createdAt: Date
+    public var lastUsedAt: Date
+    public var usageCount: Int
+
+    public init(
+        id: UUID = UUID(),
+        name: String,
+        templateID: String,
+        slotBundleIDs: [Int: String],
+        createdAt: Date = Date(),
+        lastUsedAt: Date = Date(),
+        usageCount: Int = 0
+    ) {
+        self.id = id
+        self.name = name
+        self.templateID = templateID
+        self.slotBundleIDs = slotBundleIDs
+        self.createdAt = createdAt
+        self.lastUsedAt = lastUsedAt
+        self.usageCount = usageCount
+    }
+}
+
+// MARK: - WorkspacePreset (legacy role-based workspaces)
 public struct WorkspacePreset: Codable, Identifiable {
     public let id: UUID
     public let name: String

@@ -34,6 +34,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         checkConflicts()
 
         NotificationCenter.default.addObserver(self, selector: #selector(toggleInterception), name: NSNotification.Name("ReLayEmergencyStop"), object: nil)
+        NotificationCenter.default.addObserver(forName: NSNotification.Name("ReLayInterceptionToggled"), object: nil, queue: .main) { [weak self] note in
+            let enabled = note.userInfo?["enabled"] as? Bool ?? true
+            if enabled { self?.startInterceptor() } else { self?.titleBarInterceptor.stop() }
+            self?.updateMenuBarIcon(permitted: true)
+        }
 
         AppLogger.log("runtime active", subsystem: "startup")
     }
@@ -73,8 +78,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func showAccessibilityPrompt() {
         updateMenuBarIcon(permitted: false)
 
-        // Register with the system's accessibility list (shows the toggle in Settings)
-        AccessibilityBootstrap.requestPermission()
+        // Register silently — makes ReLay appear in System Settings without triggering
+        // the macOS system popup (which would cause a confusing double-prompt).
+        AccessibilityBootstrap.registerSilently()
 
         let alert = NSAlert()
         alert.messageText = "Accessibility Access Required"
@@ -117,11 +123,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func updateMenuBarIcon(permitted: Bool) {
-        let symbolName = permitted
-            ? "rectangle.3.group"
-            : "rectangle.3.group.badge.minus"
-        statusItem?.button?.image = NSImage(systemSymbolName: symbolName,
-                                            accessibilityDescription: "ReLay")
+        let symbolName = permitted ? "rectangle.3.group" : "exclamationmark.triangle"
+        let img = NSImage(systemSymbolName: symbolName, accessibilityDescription: "ReLay")
+        img?.isTemplate = true
+        statusItem?.button?.image = img
         statusItem?.button?.toolTip = permitted
             ? "ReLay — active"
             : "ReLay — accessibility access required"
@@ -135,18 +140,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupMenuBar() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem?.button {
-            button.image = NSImage(systemSymbolName: "rectangle.3.group", accessibilityDescription: "ReLay")
+            let img = NSImage(systemSymbolName: "rectangle.3.group", accessibilityDescription: "ReLay")
+            img?.isTemplate = true   // adapts to light/dark menu bar automatically
+            button.image = img
         }
 
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "Open Layout Exposé", action: #selector(openExpose), keyEquivalent: " "))
-        menu.addItem(NSMenuItem(title: "Preferences...", action: #selector(openPreferences), keyEquivalent: ","))
+        menu.addItem(NSMenuItem(title: "Save Current Layout…", action: #selector(saveCurrentLayout), keyEquivalent: "s"))
+        menu.addItem(NSMenuItem(title: "Preferences…", action: #selector(openPreferences), keyEquivalent: ","))
         menu.addItem(NSMenuItem.separator())
-
-        let killSwitchItem = NSMenuItem(title: "Disable Interception", action: #selector(toggleInterception), keyEquivalent: "k")
-        killSwitchItem.keyEquivalentModifierMask = [.command, .shift, .option]
-        menu.addItem(killSwitchItem)
-
         menu.addItem(NSMenuItem(title: "Undo Last Layout", action: #selector(undoLayout), keyEquivalent: "z"))
         menu.addItem(NSMenuItem(title: "Shuffle Layout Windows", action: #selector(shuffleLayout), keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
@@ -173,6 +176,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func shuffleLayout() {
         SpatialTransitionEngine.shared.shuffleExposeLayout()
+    }
+
+    @objc private func saveCurrentLayout() {
+        // Opens Exposé's save dialog pre-filled with the last applied template
+        LayoutExposeController.shared.promptSaveCurrentFromMenu()
     }
 
     @objc private func toggleInterception() {

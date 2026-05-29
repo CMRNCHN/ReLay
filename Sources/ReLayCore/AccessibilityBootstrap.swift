@@ -10,8 +10,16 @@ public enum AccessibilityBootstrap {
         AXIsProcessTrusted()
     }
 
-    /// Adds this process to the Accessibility list (triggers the system prompt on first run)
-    /// and returns whether permission is already granted.
+    /// Registers this process in the Accessibility list WITHOUT showing the system prompt.
+    /// The app appears in System Settings → Privacy → Accessibility so the user can flip it on.
+    public static func registerSilently() {
+        let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: false] as CFDictionary
+        _ = AXIsProcessTrustedWithOptions(opts)
+    }
+
+    /// Adds this process to the Accessibility list AND triggers the macOS system dialog.
+    /// Only call this if you intentionally want the OS-level popup (causes double-prompt if
+    /// you also show your own NSAlert — use registerSilently() + your own UI instead).
     @discardableResult
     public static func requestPermission() -> Bool {
         let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
