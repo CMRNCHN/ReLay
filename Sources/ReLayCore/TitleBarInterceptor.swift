@@ -295,6 +295,9 @@ public final class TitleBarInterceptor {
             AppLogger.log("scroll phase began", subsystem: "interceptor")
             let location = event.location
             let fingerCount = lastKnownTouchCount
+            // Fresh UUID for every potential gesture — assigned before hit-test so all
+            // log lines from this interaction share the same prefix whether accepted or missed.
+            pendingGestureID = UUID()
 
             if let window = hitTestTitleBar(at: location) {
                 isTrackingGesture = true
@@ -404,12 +407,11 @@ public final class TitleBarInterceptor {
 
         switch qualification {
         case .accepted(let reason):
-            let gestureID = UUID()
+            // pendingGestureID was already set fresh at scroll-began; just log it.
             AppLogger.log(
-                "title bar hit gesture=\(gestureID.uuidString.prefix(8)) app=\(owner) bundle=\(bundleId) variant=\(signals.variant) topBand=\(Int(signals.topBandHeight)) hitRole=\(signals.hitRole) via \(reason)",
+                "title bar hit gesture=\(pendingGestureID.uuidString.prefix(8)) app=\(owner) bundle=\(bundleId) variant=\(signals.variant) topBand=\(Int(signals.topBandHeight)) hitRole=\(signals.hitRole) via \(reason)",
                 subsystem: "interceptor"
             )
-            pendingGestureID = gestureID
             return window
         case .semanticMiss(let reason):
             AppLogger.log(
@@ -600,16 +602,17 @@ public final class TitleBarInterceptor {
         }
 
         let ancestry = signals.ancestryRoles.joined(separator: ">")
+
+        // Reject only if the hit element is clearly inside scrollable/editable content.
+        // Everything else within the top band is treated as the title bar area —
+        // this covers Electron apps, custom-chrome apps, and any app that doesn't
+        // expose a formal AXTitleBar element.
         if signals.hasContentOwnership {
-            AppLogger.log("semantic miss: content-ownership at point (role: \(signals.hitRole))", subsystem: "interceptor")
+            AppLogger.log("semantic miss: content-ownership at point (role: \(signals.hitRole)) ancestry=\(ancestry)", subsystem: "interceptor")
             return .semanticMiss("content-ownership ancestry=\(ancestry)")
         }
 
-        if signals.allowsNormalizedTopBandOwnership {
-            return .accepted("normalized-\(signals.variant)")
-        }
-
-        return .semanticMiss("ambiguous-ownership ancestry=\(ancestry)")
+        return .accepted("geometric-topband variant=\(signals.variant)")
     }
 
     private func chromeSignals(for element: AXUIElement, window: AXUIElement) -> ChromeSignals {

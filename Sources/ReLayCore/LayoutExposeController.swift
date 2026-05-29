@@ -10,6 +10,7 @@ public final class LayoutExposeController: NSWindowController {
     private var screenFrame: CGRect = .zero
     private var currentWindows: [LayoutWindowItem] = []
     private var currentWorkspace: WorkspacePreset?
+    private var stageManagerWasEnabled: Bool = false
 
     public private(set) var isPresented: Bool = false
 
@@ -40,7 +41,8 @@ public final class LayoutExposeController: NSWindowController {
     // MARK: - Present / Dismiss
 
     public func present(triggerWindow: AXUIElement? = nil) {
-        if orchestrator.isStageManagerEnabled() {
+        stageManagerWasEnabled = orchestrator.isStageManagerEnabled()
+        if stageManagerWasEnabled {
             orchestrator.setStageManager(false)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
                 self?.presentCore(triggerWindow: triggerWindow)
@@ -78,6 +80,11 @@ public final class LayoutExposeController: NSWindowController {
 
     public override func close() {
         isPresented = false
+        // Restore Stage Manager if we disabled it when presenting
+        if stageManagerWasEnabled {
+            orchestrator.setStageManager(true)
+            stageManagerWasEnabled = false
+        }
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.12
             ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
@@ -256,14 +263,10 @@ public final class LayoutExposeController: NSWindowController {
     // MARK: - Apply
 
     private func applyTemplate(_ template: LayoutTemplate, workspace: WorkspacePreset? = nil) {
-        AppLogger.log("expose: applying \(template.name)", subsystem: "expose")
+        AppLogger.log("expose: applying \(template.name) currentWindows=\(currentWindows.count) screenFrame=\(screenFrame)", subsystem: "expose")
 
-        if orchestrator.isStageManagerEnabled() {
-            AppLogger.log("expose: disabling Stage Manager to access shelf windows", subsystem: "expose")
-            orchestrator.setStageManager(false)
-            Thread.sleep(forTimeInterval: 0.35)
-            currentWindows = makeWindowItems()
-        }
+        // Stage Manager was already disabled (if needed) before Exposé was presented,
+        // so currentWindows already contains all shelf windows.
 
         var assignments: [Int: LayoutWindowItem] = [:]
         var remaining = currentWindows
@@ -283,6 +286,12 @@ public final class LayoutExposeController: NSWindowController {
         }
         for slot in template.slots where assignments[slot.id] == nil && !remaining.isEmpty {
             assignments[slot.id] = remaining.remove(at: 0)
+        }
+
+        AppLogger.log("expose: assigned \(assignments.count)/\(template.slots.count) slots — \(assignments.values.map { $0.appName ?? $0.title }.joined(separator: ", "))", subsystem: "expose")
+        for (slotId, item) in assignments {
+            let target = template.frame(for: template.slots.first(where: { $0.id == slotId })!, in: screenFrame)
+            AppLogger.log("expose: slot \(slotId) → \(item.appName ?? item.title) target=\(target)", subsystem: "expose")
         }
 
         let orderedWindows = template.slots.compactMap { assignments[$0.id]?.element }

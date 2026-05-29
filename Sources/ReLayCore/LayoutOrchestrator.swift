@@ -50,19 +50,39 @@ class LayoutOrchestrator {
         var result: [AXUIElement] = []
         for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
             let axApp = AXUIElementCreateApplication(app.processIdentifier)
+
+            // Some apps (Electron, custom-chrome) require AXEnhancedUserInterface before
+            // their window list and frame attributes become accessible via AX.
+            AXUIElementSetAttributeValue(axApp, "AXEnhancedUserInterface" as CFString, true as CFTypeRef)
+
             var ref: CFTypeRef?
             guard AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &ref) == .success,
                   let list = ref as? [AXUIElement] else { continue }
             for window in list {
+                // Skip minimized
                 var minRef: CFTypeRef?
                 if AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &minRef) == .success,
                    let isMin = minRef as? Bool, isMin { continue }
+                // Skip fullscreen
                 var fsRef: CFTypeRef?
                 if AXUIElementCopyAttributeValue(window, "AXFullScreen" as CFString, &fsRef) == .success,
                    let isFS = fsRef as? Bool, isFS { continue }
+                // Skip Finder desktop window (subrole AXUnknown + covers full screen)
+                var subroleRef: CFTypeRef?
+                if AXUIElementCopyAttributeValue(window, kAXSubroleAttribute as CFString, &subroleRef) == .success,
+                   let subrole = subroleRef as? String,
+                   subrole == "AXUnknown" {
+                    // Check if it's screen-sized (desktop window)
+                    if let frame = getWindowFrame(window),
+                       let screen = NSScreen.screens.first,
+                       frame.width >= screen.frame.width * 0.95 {
+                        continue
+                    }
+                }
                 result.append(window)
             }
         }
+        AppLogger.log("expose: enumerated \(result.count) visible windows across \(NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }.count) apps", subsystem: "expose")
         return result
     }
 

@@ -78,6 +78,7 @@ final class SettingsWindowController: NSWindowController {
     private var centerSnapSwitch: NSSwitch?
     private var upSwipePopup: NSPopUpButton?
     private var downSwipePopup: NSPopUpButton?
+    private var interceptionSwitch: NSSwitch?
 
     // MARK: - Init
 
@@ -126,8 +127,11 @@ final class SettingsWindowController: NSWindowController {
         outer.translatesAutoresizingMaskIntoConstraints = false
         scroll.documentView = outer
         NSLayoutConstraint.activate([
+            outer.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
             outer.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
             outer.trailingAnchor.constraint(equalTo: scroll.contentView.trailingAnchor),
+            // Bottom is intentionally not pinned — lets the stack grow and scroll.
+            outer.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
         ])
 
         // Preset strip
@@ -177,6 +181,50 @@ final class SettingsWindowController: NSWindowController {
         outer.addArrangedSubview(buildSwipeActionsRow())
         outer.setCustomSpacing(20, after: outer.arrangedSubviews.last!)
 
+        // Section: Developer / Advanced
+        let sep3 = NSBox(); sep3.boxType = .separator
+        outer.addArrangedSubview(sep3)
+        outer.setCustomSpacing(16, after: sep3)
+
+        let devHeader = NSTextField(labelWithString: "Advanced")
+        devHeader.font = .systemFont(ofSize: 11, weight: .semibold)
+        devHeader.textColor = .tertiaryLabelColor
+        outer.addArrangedSubview(devHeader)
+        outer.setCustomSpacing(10, after: devHeader)
+
+        outer.addArrangedSubview(buildToggleRow(
+            title: "Enable Gesture Interception",
+            description: "When off, ReLay stops watching for gestures entirely. All title-bar swipes and Layout Exposé triggers are paused until you turn this back on. The app stays open in the menu bar so you can re-enable it without relaunching.",
+            key: "interceptionEnabled",
+            defaultOn: true,
+            switchRef: { [weak self] sw in self?.interceptionSwitch = sw }
+        ))
+        outer.setCustomSpacing(8, after: outer.arrangedSubviews.last!)
+
+        // Warning callout
+        let warningBox = NSView()
+        warningBox.wantsLayer = true
+        warningBox.layer?.backgroundColor = NSColor.systemOrange.withAlphaComponent(0.08).cgColor
+        warningBox.layer?.cornerRadius = 8
+        warningBox.layer?.borderColor = NSColor.systemOrange.withAlphaComponent(0.25).cgColor
+        warningBox.layer?.borderWidth = 1
+        warningBox.translatesAutoresizingMaskIntoConstraints = false
+
+        let warningLabel = NSTextField(wrappingLabelWithString: "⚠️  Disabling interception will make ReLay invisible to your gestures. Re-enable it here or use the ⌥⇧⌘K shortcut from any app.")
+        warningLabel.font = .systemFont(ofSize: 11)
+        warningLabel.textColor = NSColor.systemOrange
+        warningLabel.translatesAutoresizingMaskIntoConstraints = false
+        warningBox.addSubview(warningLabel)
+        NSLayoutConstraint.activate([
+            warningLabel.leadingAnchor.constraint(equalTo: warningBox.leadingAnchor, constant: 10),
+            warningLabel.trailingAnchor.constraint(equalTo: warningBox.trailingAnchor, constant: -10),
+            warningLabel.topAnchor.constraint(equalTo: warningBox.topAnchor, constant: 8),
+            warningLabel.bottomAnchor.constraint(equalTo: warningBox.bottomAnchor, constant: -8),
+        ])
+        outer.addArrangedSubview(warningBox)
+        warningBox.widthAnchor.constraint(equalTo: outer.widthAnchor, constant: -56).isActive = true
+        outer.setCustomSpacing(20, after: warningBox)
+
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .vertical)
         outer.addArrangedSubview(spacer)
@@ -196,8 +244,8 @@ final class SettingsWindowController: NSWindowController {
         titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
 
         let descLabel = NSTextField(labelWithString: setting.description)
-        descLabel.font = .systemFont(ofSize: 11)
-        descLabel.textColor = .tertiaryLabelColor
+        descLabel.font = .systemFont(ofSize: 12)
+        descLabel.textColor = .secondaryLabelColor
         descLabel.lineBreakMode = .byWordWrapping
         descLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
@@ -250,8 +298,8 @@ final class SettingsWindowController: NSWindowController {
         titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
 
         let descLabel = NSTextField(labelWithString: description)
-        descLabel.font = .systemFont(ofSize: 11)
-        descLabel.textColor = .tertiaryLabelColor
+        descLabel.font = .systemFont(ofSize: 12)
+        descLabel.textColor = .secondaryLabelColor
         descLabel.lineBreakMode = .byWordWrapping
         descLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
@@ -295,8 +343,8 @@ final class SettingsWindowController: NSWindowController {
         header.font = .systemFont(ofSize: 13, weight: .semibold)
 
         let descLabel = NSTextField(labelWithString: "What happens when you swipe up or down on a window title bar.")
-        descLabel.font = .systemFont(ofSize: 11)
-        descLabel.textColor = .tertiaryLabelColor
+        descLabel.font = .systemFont(ofSize: 12)
+        descLabel.textColor = .secondaryLabelColor
         descLabel.lineBreakMode = .byWordWrapping
         descLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
@@ -377,6 +425,14 @@ final class SettingsWindowController: NSWindowController {
         guard let key = sw.identifier?.rawValue else { return }
         UserDefaults.standard.set(sw.state == .on, forKey: key)
         postSettingsChanged()
+        // Interception toggle needs special handling beyond the settings notification
+        if key == "interceptionEnabled" {
+            NotificationCenter.default.post(
+                name: NSNotification.Name("ReLayInterceptionToggled"),
+                object: nil,
+                userInfo: ["enabled": sw.state == .on]
+            )
+        }
     }
 
     @objc private func upSwipeChanged(_ popup: NSPopUpButton) {
