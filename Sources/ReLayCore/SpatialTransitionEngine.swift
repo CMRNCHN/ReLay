@@ -61,7 +61,7 @@ public final class SpatialTransitionEngine {
         // Bootstrap the state store if this window hasn't been seen before.
         if store.record(for: window) == nil {
             let inferred = resolver.inferState(from: sessionStartFrame, on: sessionScreenFrame)
-            AppLogger.log("bootstrapped window state=\(inferred)", subsystem: "transition")
+            AppLogger.log("bootstrapped window state=\(inferred) gesture=\(gestureID.uuidString.prefix(8))", subsystem: "transition")
             let record   = WindowRecord(
                 currentState: inferred,
                 floatingFrame: inferred == .floating ? sessionStartFrame : nil
@@ -155,14 +155,14 @@ public final class SpatialTransitionEngine {
     }
 
     func endResizeSession() {
-        AppLogger.log("shift resize session ended", subsystem: "transition")
+        AppLogger.log("shift resize session ended gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "transition")
         PreviewManager.shared.dismiss(animated: false)
         clearSession()
     }
 
     func cancelResizeSession() {
         defer { clearSession() }
-        AppLogger.log("shift resize session cancelled; restoring frame", subsystem: "transition")
+        AppLogger.log("shift resize session cancelled; restoring frame gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "transition")
         guard let window = sessionWindow, !sessionStartFrame.isEmpty else { return }
         animator.animateWindowFrame(window, to: sessionStartFrame, duration: 0.120)
         PreviewManager.shared.dismiss(animated: true)
@@ -257,7 +257,7 @@ public final class SpatialTransitionEngine {
     // MARK: - Multi-window Operations
 
     private func executeLayoutExpose(triggerWindow: AXUIElement) {
-        AppLogger.log("transition request layout-expose", subsystem: "transition")
+        AppLogger.log("transition request layout-expose gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "transition")
         PreviewManager.shared.dismiss(animated: false)
         LayoutExposeController.shared.present(triggerWindow: triggerWindow)
     }
@@ -312,7 +312,7 @@ public final class SpatialTransitionEngine {
 
     private func executeAutoLayout(triggerWindow: AXUIElement) {
         let screen = sessionScreenFrame != .zero ? sessionScreenFrame : animator.getUsableScreenFrame(for: triggerWindow)
-        AppLogger.log("layout resolution request state=fullscreen auto-layout", subsystem: "transition")
+        AppLogger.log("layout resolution request state=fullscreen auto-layout gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "transition")
         let target = resolver.frame(for: .fullscreen, on: screen)
 
         if var record = store.record(for: triggerWindow) {
@@ -326,7 +326,7 @@ public final class SpatialTransitionEngine {
     }
 
     private func executeThreeColumnLayout(triggerWindow: AXUIElement) {
-        AppLogger.log("transition request three-column layout", subsystem: "transition")
+        AppLogger.log("transition request three-column layout gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "transition")
         let screen = sessionScreenFrame != .zero ? sessionScreenFrame : animator.getUsableScreenFrame(for: triggerWindow)
         var windows = animator.getAllVisibleWindows()
         guard windows.count >= 3 else { executeAutoLayout(triggerWindow: triggerWindow); return }
@@ -348,7 +348,7 @@ public final class SpatialTransitionEngine {
     }
 
     private func executeStageManagerLayout(triggerWindow: AXUIElement) {
-        AppLogger.log("transition request stage-manager layout", subsystem: "transition")
+        AppLogger.log("transition request stage-manager layout gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "transition")
         let screen = sessionScreenFrame != .zero ? sessionScreenFrame : animator.getUsableScreenFrame(for: triggerWindow)
         let windows = animator.getAllVisibleWindows()
         guard !windows.isEmpty else { return }
@@ -365,7 +365,7 @@ public final class SpatialTransitionEngine {
     }
 
     private func executeExitLayout(triggerWindow: AXUIElement) {
-        AppLogger.log("transition request exit-layout", subsystem: "transition")
+        AppLogger.log("transition request exit-layout gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "transition")
         // Exit native full screen first if applicable
         var fsRef: CFTypeRef?
         if AXUIElementCopyAttributeValue(triggerWindow, "AXFullScreen" as CFString, &fsRef) == .success,
@@ -407,7 +407,7 @@ public final class SpatialTransitionEngine {
     }
 
     private func clearSession() {
-        AppLogger.log("transition session cleared", subsystem: "transition")
+        AppLogger.log("transition session cleared gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "transition")
         sessionWindow        = nil
         sessionStartFrame    = .zero
         sessionFingerCount   = 2
