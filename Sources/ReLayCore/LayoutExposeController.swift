@@ -887,17 +887,20 @@ public final class LayoutExposeController: NSWindowController {
     }
 
     private func makeWindowItems() -> [LayoutWindowItem] {
-        orchestrator.getAllVisibleWindows().enumerated().map { i, element in
+        let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        return orchestrator.getAllVisibleWindows().enumerated().map { i, element in
             var pid: pid_t = 0
             AXUIElementGetPid(element, &pid)
             let app = NSRunningApplication(processIdentifier: pid)
             let title = orchestrator.windowTitle(for: element)
-            return LayoutWindowItem(
+            var item = LayoutWindowItem(
                 id: "\(i)-\(title)", element: element, title: title,
                 appName: app?.localizedName, bundleID: app?.bundleIdentifier,
                 appIcon: app?.icon,
                 role: WindowRoleClassifier.classify(appName: app?.localizedName, windowTitle: title)
             )
+            item.isActive = (pid == frontmostPID)
+            return item
         }
     }
 }

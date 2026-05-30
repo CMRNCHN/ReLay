@@ -142,4 +142,5 @@ struct LayoutWindowItem: Identifiable {
     let bundleID: String?
     let appIcon: NSImage?
     let role: WindowRole
+    var isActive: Bool = false
 }
