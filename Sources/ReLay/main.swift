@@ -34,17 +34,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         checkConflicts()
 
         NotificationCenter.default.addObserver(self, selector: #selector(toggleInterception), name: NSNotification.Name("ReLayEmergencyStop"), object: nil)
+        NotificationCenter.default.addObserver(forName: NSNotification.Name("ReLayInterceptionToggled"), object: nil, queue: .main) { [weak self] note in
+            let enabled = note.userInfo?["enabled"] as? Bool ?? true
+            if enabled { self?.startInterceptor() } else { self?.titleBarInterceptor.stop() }
+            self?.updateMenuBarIcon(permitted: true)
+        }
 
         AppLogger.log("runtime active", subsystem: "startup")
     }
 
     private func checkAccessibilityAndStart() {
-        let accessibilityReady = AccessibilityBootstrap.ensurePermission(promptIfNeeded: false)
-
-        if accessibilityReady {
+        if AccessibilityBootstrap.isGranted() {
             startInterceptor()
+            updateMenuBarIcon(permitted: true)
         } else {
-            showAccessibilityAlert()
+            showAccessibilityPrompt()
         }
     }
 
@@ -69,27 +73,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func showAccessibilityAlert() {
+    // MARK: - Accessibility permission flow
+
+    private func showAccessibilityPrompt() {
+        updateMenuBarIcon(permitted: false)
+
+        // Register silently — makes ReLay appear in System Settings without triggering
+        // the macOS system popup (which would cause a confusing double-prompt).
+        AccessibilityBootstrap.registerSilently()
+
         let alert = NSAlert()
-        alert.messageText = "Accessibility Permissions Required"
-        alert.informativeText = "ReLay needs Accessibility permissions to intercept title bar gestures and manage your windows.\n\nPlease grant permission in System Settings > Privacy & Security > Accessibility and then click 'Check Again'."
-        alert.addButton(withTitle: "Open System Settings")
-        alert.addButton(withTitle: "Check Again")
+        alert.messageText = "Accessibility Access Required"
+        alert.informativeText = """
+            ReLay needs Accessibility access to intercept title-bar gestures and move windows.
+
+            1. Click "Open Settings" below
+            2. Find ReLay in the list and turn it ON
+            3. ReLay will start automatically — no need to do anything else
+            """
+        alert.addButton(withTitle: "Open Settings")
         alert.addButton(withTitle: "Quit")
 
         let response = alert.runModal()
         if response == .alertFirstButtonReturn {
-            let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
-            NSWorkspace.shared.open(url)
-            // Wait for user to interact with Settings then check again manually
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                self.showAccessibilityAlert()
+            openAccessibilitySettings()
+            // Start polling — will auto-start the interceptor the moment permission is granted
+            AccessibilityBootstrap.startPolling { [weak self] in
+                self?.startInterceptor()
+                self?.updateMenuBarIcon(permitted: true)
+                self?.showGrantedNotification()
             }
-        } else if response == .alertSecondButtonReturn {
-            checkAccessibilityAndStart()
         } else {
             NSApplication.shared.terminate(nil)
         }
+    }
+
+    private func openAccessibilitySettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    private func showGrantedNotification() {
+        let alert = NSAlert()
+        alert.messageText = "ReLay is Active"
+        alert.informativeText = "Accessibility access granted. ReLay is now intercepting title-bar gestures."
+        alert.addButton(withTitle: "Got it")
+        alert.runModal()
+    }
+
+    private func updateMenuBarIcon(permitted: Bool) {
+        let symbolName = permitted ? "rectangle.3.group" : "exclamationmark.triangle"
+        let img = NSImage(systemSymbolName: symbolName, accessibilityDescription: "ReLay")
+        img?.isTemplate = true
+        statusItem?.button?.image = img
+        statusItem?.button?.toolTip = permitted
+            ? "ReLay — active"
+            : "ReLay — accessibility access required"
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -100,19 +140,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupMenuBar() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem?.button {
-            button.image = NSImage(systemSymbolName: "rectangle.3.group", accessibilityDescription: "ReLay")
+            let img = NSImage(systemSymbolName: "rectangle.3.group", accessibilityDescription: "ReLay")
+            img?.isTemplate = true   // adapts to light/dark menu bar automatically
+            button.image = img
         }
 
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "Open Layout Exposé", action: #selector(openExpose), keyEquivalent: " "))
-        menu.addItem(NSMenuItem(title: "Preferences...", action: #selector(openPreferences), keyEquivalent: ","))
+        menu.addItem(NSMenuItem(title: "Save Current Layout…", action: #selector(saveCurrentLayout), keyEquivalent: "s"))
+        menu.addItem(NSMenuItem(title: "Preferences…", action: #selector(openPreferences), keyEquivalent: ","))
         menu.addItem(NSMenuItem.separator())
-
-        let killSwitchItem = NSMenuItem(title: "Disable Interception", action: #selector(toggleInterception), keyEquivalent: "k")
-        killSwitchItem.keyEquivalentModifierMask = [.command, .shift, .option]
-        menu.addItem(killSwitchItem)
-
         menu.addItem(NSMenuItem(title: "Undo Last Layout", action: #selector(undoLayout), keyEquivalent: "z"))
+        menu.addItem(NSMenuItem(title: "Shuffle Layout Windows", action: #selector(shuffleLayout), keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit ReLay", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
 
@@ -120,8 +159,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openExpose() {
-        guard let frontmost = getFrontmostWindow() else { return }
-        LayoutExposeController.shared.present(triggerWindow: frontmost)
+        LayoutExposeController.shared.present(triggerWindow: getFrontmostWindow())
     }
 
     @objc private func openPreferences() {
@@ -134,6 +172,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func undoLayout() {
         SpatialTransitionEngine.shared.performExposeUndo()
+    }
+
+    @objc private func shuffleLayout() {
+        SpatialTransitionEngine.shared.shuffleExposeLayout()
+    }
+
+    @objc private func saveCurrentLayout() {
+        // Opens Exposé's save dialog pre-filled with the last applied template
+        LayoutExposeController.shared.promptSaveCurrentFromMenu()
     }
 
     @objc private func toggleInterception() {
@@ -165,6 +212,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 extension AppDelegate: NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         menu.item(withTitle: "Undo Last Layout")?.isEnabled = SpatialTransitionEngine.shared.canUndo
+        menu.item(withTitle: "Shuffle Layout Windows")?.isEnabled = SpatialTransitionEngine.shared.canShuffle
     }
 }
 
