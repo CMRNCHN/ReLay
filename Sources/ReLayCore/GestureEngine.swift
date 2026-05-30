@@ -67,7 +67,7 @@ public final class GestureEngine: TitleBarInterceptorDelegate {
         accumulatedX += deltaX
         accumulatedY += deltaY
         if abs(accumulatedY) > 5 && axisLocked == nil {
-            AppLogger.log("deltaY accumulating: \(accumulatedY > 0 ? "positive" : "negative") (\(accumulatedY))", subsystem: "gesture")
+            AppLogger.log("gesture=\(currentGestureID.uuidString.prefix(8)) deltaY accumulating: \(accumulatedY > 0 ? "positive" : "negative") (\(accumulatedY))", subsystem: "gesture")
         }
 
         // Axis locking: one axis must dominate the other by 1.5× before we commit direction
@@ -75,15 +75,15 @@ public final class GestureEngine: TitleBarInterceptorDelegate {
             let absX = abs(accumulatedX), absY = abs(accumulatedY)
             if absX > (thresholds["lockThreshold"] ?? 20.0) && absX > absY * 1.5 {
                 axisLocked = .horizontal
-                AppLogger.log("gesture axis locked horizontal", subsystem: "gesture")
+                AppLogger.log("gesture axis locked horizontal gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "gesture")
                 if ReLaySettings.hapticsEnabled { NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default) }
             } else if absY > (thresholds["lockThreshold"] ?? 20.0) && absY > absX * 1.5 {
                 axisLocked = .vertical
-                AppLogger.log("gesture axis locked vertical", subsystem: "gesture")
+                AppLogger.log("gesture axis locked vertical gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "gesture")
                 if ReLaySettings.hapticsEnabled { NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default) }
             } else if max(absX, absY) > (thresholds["cancelThreshold"] ?? 25.0) {
                 // Diagonal movement beyond ambiguity window — cancel
-                AppLogger.log("gesture cancelled due to diagonal ambiguity", subsystem: "gesture")
+                AppLogger.log("gesture cancelled due to diagonal ambiguity gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "gesture")
                 gestureDidCancel()
                 return
             }
@@ -104,25 +104,25 @@ public final class GestureEngine: TitleBarInterceptorDelegate {
         )
 
         if velocity > (thresholds["flickVelocity"] ?? 800.0) {
-            AppLogger.log("gesture commit via flick velocity", subsystem: "gesture")
+            AppLogger.log("gesture commit via flick velocity gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "gesture")
             commit(effectiveX: effectiveX, effectiveY: effectiveY)
         }
     }
 
     public func gestureDidEnd() {
         if isShiftMode {
-            AppLogger.log("shift resize session ended", subsystem: "gesture")
+            AppLogger.log("shift resize session ended gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "gesture")
             SpatialTransitionEngine.shared.endResizeSession()
             resetState()
             return
         }
         if hasCommitted {
-            AppLogger.log("gesture ended after committed transition", subsystem: "gesture")
+            AppLogger.log("gesture ended after committed transition gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "gesture")
             resetState()
             return
         }
         guard !hasCommitted, let lockedAxis = axisLocked else {
-            AppLogger.log("gesture ended without locked axis; cancelling", subsystem: "gesture")
+            AppLogger.log("gesture ended without locked axis; cancelling gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "gesture")
             gestureDidCancel()
             return
         }
@@ -130,28 +130,28 @@ public final class GestureEngine: TitleBarInterceptorDelegate {
         let effectiveY = lockedAxis == .vertical   ? accumulatedY : 0
         let actionVal  = thresholds["actionThreshold"] ?? 100.0
         if abs(effectiveX) > actionVal || abs(effectiveY) > actionVal {
-            AppLogger.log("gesture commit via distance threshold", subsystem: "gesture")
+            AppLogger.log("gesture commit via distance threshold gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "gesture")
             commit(effectiveX: effectiveX, effectiveY: effectiveY)
         } else {
-            AppLogger.log("gesture ended below action threshold; cancelling", subsystem: "gesture")
+            AppLogger.log("gesture ended below action threshold; cancelling gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "gesture")
             gestureDidCancel()
         }
     }
 
     public func gestureDidCancel() {
         if isShiftMode {
-            AppLogger.log("shift resize session cancelled", subsystem: "gesture")
+            AppLogger.log("shift resize session cancelled gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "gesture")
             SpatialTransitionEngine.shared.cancelResizeSession()
             resetState()
             return
         }
         guard !hasCommitted else {
-            AppLogger.log("gesture cancel received after commit; resetting", subsystem: "gesture")
+            AppLogger.log("gesture cancel received after commit; resetting gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "gesture")
             resetState()
             return
         }
         hasCommitted = true
-        AppLogger.log("gesture cancelled", subsystem: "gesture")
+        AppLogger.log("gesture cancelled gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "gesture")
         SpatialTransitionEngine.shared.cancelSession()
         resetState()
     }

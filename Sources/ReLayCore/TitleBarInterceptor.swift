@@ -347,14 +347,14 @@ public final class TitleBarInterceptor {
             let deltaY = nsEvent.scrollingDeltaY
             let velocity = sqrt(deltaX * deltaX + deltaY * deltaY) * 60.0 
             
-            AppLogger.log("scroll phase changed while tracking", subsystem: "interceptor")
+            AppLogger.log("scroll phase changed while tracking gesture=\(pendingGestureID.uuidString.prefix(8))", subsystem: "interceptor")
             delegate?.gestureDidChange(deltaX: deltaX, deltaY: deltaY, velocity: velocity)
             return nil // Swallow event
         }
-        
+
         // Phase: Ended or Cancelled
         if (phase == .ended || phase == .cancelled || momentumPhase == .began) && isTrackingGesture {
-            AppLogger.log("scroll gesture finished phase=\(phase.rawValue) momentum=\(momentumPhase.rawValue)", subsystem: "interceptor")
+            AppLogger.log("scroll gesture finished gesture=\(pendingGestureID.uuidString.prefix(8)) phase=\(phase.rawValue) momentum=\(momentumPhase.rawValue)", subsystem: "interceptor")
             if phase == .cancelled {
                 delegate?.gestureDidCancel()
             } else {
