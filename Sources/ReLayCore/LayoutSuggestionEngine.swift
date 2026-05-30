@@ -19,6 +19,30 @@ struct LayoutSuggestionEngine {
     }
 
     static func rank(context: Context) -> [Suggestion] {
+#if DEBUG
+        // GUARD 1 — active window consistency
+        // context.activeWindow and LayoutWindowItem.isActive must agree on identity.
+        // Mismatch means makeWindowItems() and the Context builder have diverged.
+        if let explicit = context.activeWindow {
+            let flaggedItems = context.windows.filter { $0.isActive }
+            if !flaggedItems.isEmpty {
+                let ids = Set(flaggedItems.map { $0.id })
+                if !ids.contains(explicit.id) {
+                    AppLogger.log(
+                        "STRICT: activeWindow identity mismatch — explicit=\(explicit.id) flagged=\(ids.sorted().joined(separator: ","))",
+                        subsystem: "suggestion"
+                    )
+                    for w in context.windows {
+                        AppLogger.log(
+                            "STRICT: window id=\(w.id) role=\(w.role) isActive=\(w.isActive)",
+                            subsystem: "suggestion"
+                        )
+                    }
+                    // do NOT auto-correct — log only
+                }
+            }
+        }
+#endif
         let templates    = LayoutTemplate.all
         let windowCount  = context.windows.count
         let roleCounts   = context.windows.reduce(into: [WindowRole: Int]()) { $0[$1.role, default: 0] += 1 }

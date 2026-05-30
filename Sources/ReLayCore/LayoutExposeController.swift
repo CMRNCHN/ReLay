@@ -2,6 +2,9 @@ import AppKit
 import ApplicationServices
 
 // MARK: - LayoutExposeController
+// NON-GESTURE EXECUTION PATH — this controller initiates layout actions directly,
+// bypassing GestureEngine and SpatialTransitionEngine. It calls LayoutOrchestrator
+// directly and writes state back to SpatialTransitionEngine via registerExposeState/Undo.
 
 public final class LayoutExposeController: NSWindowController {
     public static let shared = LayoutExposeController()
