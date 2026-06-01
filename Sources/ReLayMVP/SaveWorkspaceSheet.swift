@@ -9,7 +9,7 @@ struct SaveWorkspaceSheet: View {
     @FocusState private var focused: Bool
 
     var body: some View {
-        VStack(spacing: 20) {
+        VStack(alignment: .leading, spacing: 12) {
             Text("Save Workspace")
                 .font(.headline)
 
@@ -19,22 +19,26 @@ struct SaveWorkspaceSheet: View {
                 .onSubmit { save() }
 
             HStack {
-                Button("Cancel", role: .cancel) { dismiss() }
-                    .keyboardShortcut(.escape, modifiers: [])
                 Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.escape, modifiers: [])
                 Button("Save") { save() }
                     .buttonStyle(.borderedProminent)
-                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     .keyboardShortcut(.return, modifiers: [])
             }
         }
-        .padding(24)
+        .padding(16)
         .frame(width: 320)
-        .onAppear { focused = true }
+        .onAppear {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                focused = true
+            }
+        }
     }
 
     private func save() {
-        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         onSave(trimmed)
         dismiss()
