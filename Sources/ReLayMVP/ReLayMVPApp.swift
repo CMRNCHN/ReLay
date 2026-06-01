@@ -7,14 +7,13 @@ struct ReLayMVPApp: App {
 
     @StateObject private var model = AppModel()
 
-    init() {
-        NSApp.activate(ignoringOtherApps: true)
-    }
-
     var body: some Scene {
         WindowGroup {
             WorkspaceListView()
                 .environmentObject(model)
+                .onAppear {
+                    NSApp.activate(ignoringOtherApps: true)
+                }
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 480, height: 560)
