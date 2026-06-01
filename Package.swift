@@ -28,6 +28,13 @@ let package = Package(
             path: "Sources/ReLayCore"
         ),
 
+        // v2 architecture scaffold — compiled alongside v1, not yet integrated.
+        // Entry point lives in AppModel; wired into the executable when v2 replaces v1.
+        .target(
+            name: "ReLayV2",
+            path: "Sources/ReLayV2"
+        ),
+
         .testTarget(
             name: "ReLayCoreTests",
             dependencies: ["ReLayCore"],
