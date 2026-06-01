@@ -57,7 +57,7 @@ struct WorkspaceListView: View {
             Text("No saved workspaces")
                 .font(.title3)
                 .foregroundStyle(.secondary)
-            Text("Arrange your windows, then tap "Save Current".")
+            Text("Arrange your windows, then tap Save Current.")
                 .font(.subheadline)
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
