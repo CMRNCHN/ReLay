@@ -1,10 +1,13 @@
 import SwiftUI
+import AppKit
+import ApplicationServices
 import ReLayV2
 
 struct WorkspaceListView: View {
 
     @EnvironmentObject private var model: AppModel
     @State private var showingSaveSheet = false
+    @State private var hasAxPermission = AXIsProcessTrusted()
 
     private static let dateFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -18,6 +21,26 @@ struct WorkspaceListView: View {
             header
             Divider()
             content
+        }
+        .safeAreaInset(edge: .top) {
+            if !hasAxPermission {
+                HStack {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
+                    Text("Accessibility permission required.")
+                        .font(.caption)
+                    Spacer()
+                    Button("Grant Access") {
+                        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
+                        AXIsProcessTrustedWithOptions(options as CFDictionary)
+                    }
+                    .font(.caption)
+                }
+                .padding(8)
+                .background(.regularMaterial)
+            }
+        }
+        .onAppear {
+            hasAxPermission = AXIsProcessTrusted()
         }
         .sheet(isPresented: $showingSaveSheet) {
             SaveWorkspaceSheet { name in
