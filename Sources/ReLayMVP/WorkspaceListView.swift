@@ -100,7 +100,7 @@ struct WorkspaceRow: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     if workspace.activationCount > 0 {
-                        Label("\(workspace.activationCount)", systemImage: "arrow.trianglehead.clockwise")
+                        Label("\(workspace.activationCount)", systemImage: "arrow.clockwise")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

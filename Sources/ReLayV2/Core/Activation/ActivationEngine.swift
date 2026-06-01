@@ -20,9 +20,7 @@ public final class ActivationEngine {
         for appLayout in workspace.layout.appLayouts {
             guard let window = match(appLayout: appLayout, in: liveWindows) else { continue }
 
-            let screen = captureService.screenForIdentifier(appLayout.displayID)
-                ?? captureService.screenContaining(axFrame: .zero)
-                ?? NSScreen.main
+            let screen = captureService.screenForIdentifier(appLayout.displayID) ?? NSScreen.main
 
             guard let screen = screen else { continue }
 
