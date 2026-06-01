@@ -58,22 +58,6 @@ final class IntentEngine {
     // MARK: - Reactive Context Evaluation
 
     private func evaluateSnapshot(_ snapshot: AppSnapshot) {
-        guard let workspace = workspaceStore.find(matching: snapshot.activeApps) else { return }
-
-        if trustMachine.allowsAutoActivation(for: workspace.id) {
-            // Phase 3: auto-activate — only reachable via explicit user delegation
-            activationEngine.activate(workspace)
-            trustMachine.recordActivation(for: workspace.id, wasSuggested: false)
-            workspaceStore.recordActivation(workspace.id)
-        } else {
-            let suggestion = WorkspaceSuggestion(
-                workspaceID: workspace.id,
-                workspaceName: workspace.name,
-                trigger: .appPattern,
-                confidence: 1.0
-            )
-            pendingSuggestion = suggestion
-            onSuggestion?(suggestion)
-        }
+        // Suggestion path not used in MVP — explicit activation only.
     }
 }
