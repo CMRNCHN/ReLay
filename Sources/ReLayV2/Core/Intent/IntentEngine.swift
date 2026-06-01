@@ -1,8 +1,7 @@
 import Foundation
 
-/// Receives Intent values from the input layer and routes them to WorkspaceSession.
-/// Also observes context changes from ContextEngine and surfaces suggestions
-/// when a matching workspace exists but trust has not yet reached Phase 3.
+/// Receives Intent values from the input layer and routes them to WorkspaceStore + ActivationEngine.
+/// Also observes context changes and surfaces suggestions when a matching workspace exists.
 ///
 /// Data flow:
 ///   ContextEngine (observation) → IntentEngine (suggestion) → UI banner
@@ -40,20 +39,18 @@ final class IntentEngine {
 
         case .activateWorkspace(let id):
             guard let workspace = workspaceStore.get(id) else { return }
-            let snapshot = contextEngine.captureSnapshot()
-            activationEngine.activate(workspace, snapshot: snapshot)
+            activationEngine.activate(workspace)
             trustMachine.recordActivation(for: id, wasSuggested: pendingSuggestion?.workspaceID == id)
             workspaceStore.recordActivation(id)
             pendingSuggestion = nil
 
         case .createWorkspaceFromCurrent:
-            let snapshot = contextEngine.captureSnapshot()
-            let workspace = WorkspaceBuilder.build(from: snapshot)
+            let captureService = WorkspaceCaptureService()
+            let windows = captureService.captureWindows()
+            let workspace = WorkspaceBuilder.build(from: windows, name: "Workspace")
             workspaceStore.save(workspace)
 
         case .snapWindow, .enterExpose, .undo:
-            // Handled by the existing gesture pipeline.
-            // These intents bridge v1 and v2; routing to v1 occurs at the app layer.
             break
         }
     }
@@ -64,12 +61,11 @@ final class IntentEngine {
         guard let workspace = workspaceStore.find(matching: snapshot.activeApps) else { return }
 
         if trustMachine.allowsAutoActivation(for: workspace.id) {
-            // Phase 3: auto-activate, user has explicitly delegated this workspace
-            activationEngine.activate(workspace, snapshot: snapshot)
+            // Phase 3: auto-activate — only reachable via explicit user delegation
+            activationEngine.activate(workspace)
             trustMachine.recordActivation(for: workspace.id, wasSuggested: false)
             workspaceStore.recordActivation(workspace.id)
         } else {
-            // Phase 1–2: surface a suggestion only
             let suggestion = WorkspaceSuggestion(
                 workspaceID: workspace.id,
                 workspaceName: workspace.name,

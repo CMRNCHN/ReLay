@@ -1,15 +1,19 @@
 import Foundation
 
-/// Constructs a Workspace from a live AppSnapshot.
-/// This is the "save current environment" path — no editor, no configuration.
-enum WorkspaceBuilder {
+/// Constructs a Workspace from a live capture.
+public enum WorkspaceBuilder {
 
-    static func build(from snapshot: AppSnapshot, name: String? = nil) -> Workspace {
-        let appLayouts = snapshot.windows.map { window in
-            AppLayout(bundleID: window.bundleID, normalizedFrame: window.normalizedFrame)
+    public static func build(from windows: [WorkspaceCaptureService.CapturedWindow], name: String) -> Workspace {
+        let appLayouts = windows.map { w in
+            AppLayout(
+                bundleID: w.bundleID,
+                windowTitle: w.windowTitle,
+                normalizedFrame: w.normalizedFrame,
+                displayID: w.displayID
+            )
         }
         return Workspace(
-            name: name ?? "Workspace",
+            name: name,
             layout: WorkspaceLayout(appLayouts: appLayouts)
         )
     }

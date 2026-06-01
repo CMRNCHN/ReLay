@@ -1,50 +1,45 @@
 import Foundation
 
-/// Top-level dependency graph for the v2 architecture.
-/// Owns all core engine instances and wires them together.
-/// The gesture pipeline (v1) integrates by calling intentEngine.handle(_:).
 @MainActor
-final class AppModel: ObservableObject {
+public final class AppModel: ObservableObject {
 
-    let contextEngine    = ContextEngine()
-    let workspaceStore   = WorkspaceStore()
-    let activationEngine = ActivationEngine()
-    let trustMachine     = TrustStateMachine()
-    let permissions      = PermissionService()
-    let intentEngine:      IntentEngine
+    public let captureService   = WorkspaceCaptureService()
+    public let workspaceStore   = WorkspaceStore()
+    public let activationEngine: ActivationEngine
+    public let trustMachine     = TrustStateMachine()
 
-    @Published var pendingSuggestion: WorkspaceSuggestion?
-    @Published var isFirstLaunch: Bool
+    @Published public var workspaces: [Workspace] = []
+    @Published public var isCapturing = false
 
-    init() {
-        let hasLaunchedBefore = UserDefaults.standard.bool(forKey: "ReLayV2HasLaunched")
-        isFirstLaunch = !hasLaunchedBefore
-
-        intentEngine = IntentEngine(
-            contextEngine:    contextEngine,
-            workspaceStore:   workspaceStore,
-            trustMachine:     trustMachine,
-            activationEngine: activationEngine
-        )
-
-        intentEngine.onSuggestion = { [weak self] suggestion in
-            Task { @MainActor [weak self] in
-                self?.pendingSuggestion = suggestion
-            }
-        }
+    public init() {
+        activationEngine = ActivationEngine(captureService: captureService)
+        workspaces = workspaceStore.all()
     }
 
-    func acknowledgeFirstLaunch() {
-        UserDefaults.standard.set(true, forKey: "ReLayV2HasLaunched")
-        isFirstLaunch = false
+    // MARK: - Capture
+
+    public func captureWorkspace(name: String) {
+        isCapturing = true
+        let windows = captureService.captureWindows()
+        let workspace = WorkspaceBuilder.build(from: windows, name: name)
+        workspaceStore.save(workspace)
+        workspaces = workspaceStore.all()
+        isCapturing = false
     }
 
-    func dismissSuggestion() {
-        pendingSuggestion = nil
+    // MARK: - Activate
+
+    public func activate(_ workspace: Workspace) {
+        activationEngine.activate(workspace)
+        workspaceStore.recordActivation(workspace.id)
+        trustMachine.recordActivation(for: workspace.id, wasSuggested: false)
+        workspaces = workspaceStore.all()
     }
 
-    func acceptSuggestion() {
-        guard let suggestion = pendingSuggestion else { return }
-        intentEngine.handle(.activateWorkspace(suggestion.workspaceID))
+    // MARK: - Delete
+
+    public func delete(_ workspace: Workspace) {
+        workspaceStore.delete(workspace.id)
+        workspaces = workspaceStore.all()
     }
 }

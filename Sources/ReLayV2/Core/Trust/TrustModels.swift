@@ -2,7 +2,7 @@ import Foundation
 
 /// Trust is per-workspace. Every workspace starts at .explicitOnly
 /// and advances independently through the phase lifecycle.
-enum TrustPhase: Codable, Equatable {
+public enum TrustPhase: Codable, Equatable {
     case explicitOnly
     /// System may suggest; user must confirm each activation.
     /// Auto-promoted from explicitOnly after sufficient confirmed activations.
@@ -12,15 +12,17 @@ enum TrustPhase: Codable, Equatable {
     case ambientIntelligence
 }
 
-struct TrustRecord: Codable {
-    var phase: TrustPhase = .explicitOnly
-    var totalActivations: Int = 0
-    var suggestedActivations: Int = 0
+public struct TrustRecord: Codable {
+    public var phase: TrustPhase = .explicitOnly
+    public var totalActivations: Int = 0
+    public var suggestedActivations: Int = 0
 
-    var successRate: Double {
+    public var successRate: Double {
         guard totalActivations > 0 else { return 0 }
         return Double(suggestedActivations) / Double(totalActivations)
     }
+
+    public init() {}
 }
 
 // MARK: - Phase promotion thresholds

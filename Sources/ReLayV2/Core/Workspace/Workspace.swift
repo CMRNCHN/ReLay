@@ -1,18 +1,18 @@
 import Foundation
 
-typealias WorkspaceID = UUID
+public typealias WorkspaceID = UUID
 
-struct Workspace: Identifiable, Codable {
-    let id: WorkspaceID
-    var name: String
-    var triggers: [WorkspaceTrigger]
-    var layout: WorkspaceLayout
-    var trustPhase: TrustPhase
-    var createdAt: Date
-    var lastActivatedAt: Date?
-    var activationCount: Int
+public struct Workspace: Identifiable, Codable {
+    public let id: WorkspaceID
+    public var name: String
+    public var triggers: [WorkspaceTrigger]
+    public var layout: WorkspaceLayout
+    public var trustPhase: TrustPhase
+    public var createdAt: Date
+    public var lastActivatedAt: Date?
+    public var activationCount: Int
 
-    init(
+    public init(
         id: WorkspaceID = UUID(),
         name: String,
         triggers: [WorkspaceTrigger] = [],
@@ -30,18 +30,29 @@ struct Workspace: Identifiable, Codable {
     }
 }
 
-enum WorkspaceTrigger: Codable, Equatable {
+public enum WorkspaceTrigger: Codable, Equatable {
     case appLaunch(bundleID: String)
     case manualShortcut(keyString: String)
     case gitBranch(pattern: String)   // reserved: not yet implemented
 }
 
-struct WorkspaceLayout: Codable {
-    var appLayouts: [AppLayout]
+public struct WorkspaceLayout: Codable {
+    public var appLayouts: [AppLayout]
+    public init(appLayouts: [AppLayout]) { self.appLayouts = appLayouts }
 }
 
-struct AppLayout: Codable {
-    let bundleID: String
+public struct AppLayout: Codable {
+    public let bundleID: String
+    public let windowTitle: String
     /// Frame as 0–1 fractions of screen bounds. Resolved at activation time.
-    let normalizedFrame: NormalizedRect
+    public let normalizedFrame: NormalizedRect
+    /// CGDirectDisplayID as String for display-aware resolution.
+    public let displayID: String
+
+    public init(bundleID: String, windowTitle: String, normalizedFrame: NormalizedRect, displayID: String) {
+        self.bundleID = bundleID
+        self.windowTitle = windowTitle
+        self.normalizedFrame = normalizedFrame
+        self.displayID = displayID
+    }
 }

@@ -4,21 +4,55 @@ import ApplicationServices
 import Accessibility
 
 /// The only layer that writes AX position/size attributes.
-/// Receives a Workspace + live WindowSnapshot, resolves normalized frames
-/// to screen coordinates, and applies them.
-final class ActivationEngine {
+/// Re-enumerates live windows at activation time — never uses a stale snapshot.
+/// Window matching: exact bundle+title → partial title contains → bundle-only fallback.
+public final class ActivationEngine {
 
-    func activate(_ workspace: Workspace, snapshot: AppSnapshot) {
-        guard let screen = NSScreen.main else { return }
-        let screenBounds = screen.frame
+    private let captureService: WorkspaceCaptureService
+
+    public init(captureService: WorkspaceCaptureService = WorkspaceCaptureService()) {
+        self.captureService = captureService
+    }
+
+    public func activate(_ workspace: Workspace) {
+        let liveWindows = captureService.captureWindows()
 
         for appLayout in workspace.layout.appLayouts {
-            guard let windowInfo = snapshot.windows.first(where: { $0.bundleID == appLayout.bundleID })
-            else { continue }
+            guard let window = match(appLayout: appLayout, in: liveWindows) else { continue }
 
-            let frame = appLayout.normalizedFrame.resolved(to: screenBounds)
-            applyFrame(windowInfo.axElement, frame: frame)
+            let screen = captureService.screenForIdentifier(appLayout.displayID)
+                ?? captureService.screenContaining(axFrame: .zero)
+                ?? NSScreen.main
+
+            guard let screen = screen else { continue }
+
+            let appKitFrame = appLayout.normalizedFrame.resolved(to: screen.frame)
+            let axFrame = captureService.flipToAX(appKitFrame)
+            applyFrame(window.axElement, frame: axFrame)
         }
+    }
+
+    // MARK: - Window matching
+
+    private func match(appLayout: AppLayout,
+                       in windows: [WorkspaceCaptureService.CapturedWindow])
+        -> WorkspaceCaptureService.CapturedWindow?
+    {
+        // Tier 1: exact bundle + exact title
+        if let exact = windows.first(where: {
+            $0.bundleID == appLayout.bundleID && $0.windowTitle == appLayout.windowTitle
+        }) { return exact }
+
+        // Tier 2: exact bundle + title substring match
+        if !appLayout.windowTitle.isEmpty,
+           let partial = windows.first(where: {
+               $0.bundleID == appLayout.bundleID
+               && ($0.windowTitle.contains(appLayout.windowTitle)
+                   || appLayout.windowTitle.contains($0.windowTitle))
+           }) { return partial }
+
+        // Tier 3: bundle-only (first visible window of that app)
+        return windows.first(where: { $0.bundleID == appLayout.bundleID })
     }
 
     // MARK: - AX Write (only site in ReLayV2)

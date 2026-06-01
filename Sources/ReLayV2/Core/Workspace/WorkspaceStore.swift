@@ -2,12 +2,12 @@ import Foundation
 
 /// Single authority for workspace reads and writes.
 /// Persists to JSON in Application Support.
-final class WorkspaceStore {
+public final class WorkspaceStore {
 
     private var workspaces: [WorkspaceID: Workspace] = [:]
     private let storeURL: URL
 
-    init() {
+    public init() {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let dir = appSupport.appendingPathComponent("ReLay")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -15,41 +15,28 @@ final class WorkspaceStore {
         load()
     }
 
-    func get(_ id: WorkspaceID) -> Workspace? { workspaces[id] }
+    public func get(_ id: WorkspaceID) -> Workspace? { workspaces[id] }
 
-    func all() -> [Workspace] {
+    public func all() -> [Workspace] {
         workspaces.values.sorted { $0.createdAt < $1.createdAt }
     }
 
-    func save(_ workspace: Workspace) {
+    public func save(_ workspace: Workspace) {
         workspaces[workspace.id] = workspace
         persist()
     }
 
-    func delete(_ id: WorkspaceID) {
+    public func delete(_ id: WorkspaceID) {
         workspaces.removeValue(forKey: id)
         persist()
     }
 
-    func recordActivation(_ id: WorkspaceID) {
+    public func recordActivation(_ id: WorkspaceID) {
         guard var w = workspaces[id] else { return }
         w.activationCount += 1
         w.lastActivatedAt = Date()
         workspaces[id] = w
         persist()
-    }
-
-    /// Returns the first workspace whose triggers match the given active app set.
-    func find(matching activeApps: [String]) -> Workspace? {
-        let appSet = Set(activeApps)
-        return workspaces.values.first { workspace in
-            workspace.triggers.contains { trigger in
-                if case .appLaunch(let bundleID) = trigger {
-                    return appSet.contains(bundleID)
-                }
-                return false
-            }
-        }
     }
 
     // MARK: - Persistence
