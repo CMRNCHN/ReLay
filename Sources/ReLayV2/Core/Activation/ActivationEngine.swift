@@ -16,16 +16,20 @@ public final class ActivationEngine {
 
     public func activate(_ workspace: Workspace) {
         let liveWindows = captureService.captureWindows()
+        print("[ReLay] Activating '\(workspace.name)' — \(liveWindows.count) live windows found")
 
         for appLayout in workspace.layout.appLayouts {
-            guard let window = match(appLayout: appLayout, in: liveWindows) else { continue }
+            guard let window = match(appLayout: appLayout, in: liveWindows) else {
+                print("[ReLay] No match for \(appLayout.bundleID) '\(appLayout.windowTitle)'")
+                continue
+            }
 
             let screen = captureService.screenForIdentifier(appLayout.displayID) ?? NSScreen.main
-
             guard let screen = screen else { continue }
 
             let appKitFrame = appLayout.normalizedFrame.resolved(to: screen.frame)
             let axFrame = captureService.flipToAX(appKitFrame)
+            print("[ReLay] Moving \(appLayout.bundleID) to \(axFrame)")
             applyFrame(window.axElement, frame: axFrame)
         }
     }
