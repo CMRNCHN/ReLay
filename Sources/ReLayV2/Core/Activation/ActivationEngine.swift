@@ -6,9 +6,12 @@ import Accessibility
 /// The only layer that writes AX position/size attributes.
 /// Re-enumerates live windows at activation time — never uses a stale snapshot.
 /// Window matching: exact bundle+title → partial title contains → bundle-only fallback.
+/// Idempotent: only moves windows that differ from their target frame by more than the tolerance.
 public final class ActivationEngine {
 
     private let captureService: WorkspaceCaptureService
+    /// Two frames are considered equal if position and size each differ by less than this many points.
+    private let tolerance: CGFloat = 4.0
 
     public init(captureService: WorkspaceCaptureService = WorkspaceCaptureService()) {
         self.captureService = captureService
@@ -16,22 +19,40 @@ public final class ActivationEngine {
 
     public func activate(_ workspace: Workspace) {
         let liveWindows = captureService.captureWindows()
-        print("[ReLay] Activating '\(workspace.name)' — \(liveWindows.count) live windows found")
+        var moved = 0
 
         for appLayout in workspace.layout.appLayouts {
-            guard let window = match(appLayout: appLayout, in: liveWindows) else {
-                print("[ReLay] No match for \(appLayout.bundleID) '\(appLayout.windowTitle)'")
-                continue
-            }
+            guard let window = match(appLayout: appLayout, in: liveWindows) else { continue }
 
             let screen = captureService.screenForIdentifier(appLayout.displayID) ?? NSScreen.main
             guard let screen = screen else { continue }
 
-            let appKitFrame = appLayout.normalizedFrame.resolved(to: screen.frame)
-            let axFrame = captureService.flipToAX(appKitFrame)
-            print("[ReLay] Moving \(appLayout.bundleID) to \(axFrame)")
-            applyFrame(window.axElement, frame: axFrame)
+            let targetAXFrame = captureService.flipToAX(appLayout.normalizedFrame.resolved(to: screen.frame))
+
+            // Read current AX frame; skip if already within tolerance
+            if let currentAXFrame = captureService.readAXFrame(window.axElement),
+               framesEqual(currentAXFrame, targetAXFrame) {
+                continue
+            }
+
+            applyFrame(window.axElement, frame: targetAXFrame)
+            moved += 1
         }
+
+        if moved == 0 {
+            print("[ReLay] no-op: '\(workspace.name)' already applied")
+        } else {
+            print("[ReLay] '\(workspace.name)': moved \(moved) window(s)")
+        }
+    }
+
+    // MARK: - Equality
+
+    private func framesEqual(_ a: CGRect, _ b: CGRect) -> Bool {
+        abs(a.origin.x - b.origin.x) < tolerance &&
+        abs(a.origin.y - b.origin.y) < tolerance &&
+        abs(a.size.width - b.size.width) < tolerance &&
+        abs(a.size.height - b.size.height) < tolerance
     }
 
     // MARK: - Window matching
@@ -40,12 +61,10 @@ public final class ActivationEngine {
                        in windows: [WorkspaceCaptureService.CapturedWindow])
         -> WorkspaceCaptureService.CapturedWindow?
     {
-        // Tier 1: exact bundle + exact title
         if let exact = windows.first(where: {
             $0.bundleID == appLayout.bundleID && $0.windowTitle == appLayout.windowTitle
         }) { return exact }
 
-        // Tier 2: exact bundle + title substring match
         if !appLayout.windowTitle.isEmpty,
            let partial = windows.first(where: {
                $0.bundleID == appLayout.bundleID
@@ -53,7 +72,6 @@ public final class ActivationEngine {
                    || appLayout.windowTitle.contains($0.windowTitle))
            }) { return partial }
 
-        // Tier 3: bundle-only (first visible window of that app)
         return windows.first(where: { $0.bundleID == appLayout.bundleID })
     }
 
