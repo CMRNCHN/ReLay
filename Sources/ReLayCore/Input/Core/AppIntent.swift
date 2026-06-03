@@ -1,9 +1,2 @@
-import CoreGraphics
-
-enum AppIntent {
-    case navigateBack
-    case navigateForward
-    case zoomIn
-    case zoomOut
-    case moveWorkspace(delta: CGPoint)
-}
+// AppIntent is defined in Sources/ReLayCore/AppIntent.swift (the authoritative version).
+// This file is intentionally empty to avoid redeclaration in the same module.

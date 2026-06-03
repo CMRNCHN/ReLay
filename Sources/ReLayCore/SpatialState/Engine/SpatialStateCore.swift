@@ -8,9 +8,9 @@ import Foundation
 /// converge here before touching macOS. This eliminates dual-write conflicts
 /// and makes state drift measurable and correctable.
 ///
-/// Usage:
-///   SpatialStateCore.shared.applyWorkspaceMove(delta: delta)
-///   SpatialStateCore.shared.captureFromSystem()
+/// Gesture moves are motion-smoothed: raw deltas accumulate in targetOffset and
+/// are drained each frame at lerpFactor (0.25), giving continuous motion without
+/// per-event AX writes. State and AX converge within a few frames after a gesture.
 public final class SpatialStateCore {
 
     public static let shared: SpatialStateCore = {
@@ -28,17 +28,24 @@ public final class SpatialStateCore {
 
     public let store: SpatialStateStore
     private let reconciler: ReconciliationEngine
-    private let mover     = WindowMover()
-    private let focusCtrl = FocusController()
+    private let mover = WindowMover()
 
+    // Reconciliation runs every 5 seconds at most — never per gesture.
     private var reconcileTimer: Timer?
-    private let reconcileInterval: TimeInterval = 30
+    private let reconcileInterval: TimeInterval = 5
+
+    // Motion smoothing: gesture deltas accumulate in targetOffset.
+    // Each 16ms tick the display position converges toward target via lerp.
+    private var targetOffset: CGPoint = .zero   // where we want windows to be
+    private var currentOffset: CGPoint = .zero  // what AX currently shows
+    private var smoothTimer: DispatchSourceTimer?
+    private let lerpFactor: CGFloat = 0.25
+    private let settleThreshold: CGFloat = 0.5
 
     private init(store: SpatialStateStore, reconciler: ReconciliationEngine) {
         self.store      = store
         self.reconciler = reconciler
 
-        // When internal state wins reconciliation, push to macOS via WindowMover
         reconciler.onRestoreRequired = { [weak self] windows in
             self?.pushToSystem(windows)
         }
@@ -50,9 +57,11 @@ public final class SpatialStateCore {
 
     /// Translate every window in the current workspace by `delta`.
     /// Called by gesture pipeline on continuous scroll events.
+    /// Accumulates into targetOffset; AX writes happen at 60fps via lerp drain.
     public func applyWorkspaceMove(delta: CGPoint) {
-        store.mutate { StateReducer.applyWorkspaceDelta(delta, to: &$0) }
-        pushCurrentStateToSystem()
+        targetOffset.x += delta.x
+        targetOffset.y += delta.y
+        startSmoothTimerIfNeeded()
     }
 
     /// Replace internal model with a fresh CGWindowList capture.
@@ -69,8 +78,7 @@ public final class SpatialStateCore {
         store.mutate { StateReducer.markClean(&$0) }
     }
 
-    /// Notify the core that a gesture pipeline layout change has been applied.
-    /// Records the updated frames in the internal model without re-querying AX.
+    /// Record an updated frame for a specific window without re-querying AX.
     public func notifyWindowMoved(id: String, to frame: CGRect) {
         store.mutate { state in
             if let idx = state.workspace.windows.firstIndex(where: { $0.id == id }) {
@@ -82,8 +90,7 @@ public final class SpatialStateCore {
 
     // MARK: - Reconciliation
 
-    /// Start periodic background reconciliation.
-    /// Safe to call multiple times — restarts the timer if already running.
+    /// Start periodic background reconciliation (capped at reconcileInterval, never per-gesture).
     public func startReconciliation() {
         stopReconciliation()
         let timer = Timer.scheduledTimer(
@@ -108,6 +115,46 @@ public final class SpatialStateCore {
         store.read()
     }
 
+    // MARK: - Motion Smoothing
+
+    private func startSmoothTimerIfNeeded() {
+        guard smoothTimer == nil else { return }
+        let timer = DispatchSource.makeTimerSource(flags: [], queue: .main)
+        timer.schedule(deadline: .now(), repeating: .milliseconds(16))
+        timer.setEventHandler { [weak self] in
+            self?.drainSmoothStep()
+        }
+        timer.resume()
+        smoothTimer = timer
+    }
+
+    /// Each 16ms tick: lerp currentOffset toward targetOffset, apply step to state and AX.
+    private func drainSmoothStep() {
+        let dx = targetOffset.x - currentOffset.x
+        let dy = targetOffset.y - currentOffset.y
+
+        guard abs(dx) > settleThreshold || abs(dy) > settleThreshold else {
+            // Settled — commit any residual and stop
+            let residual = CGPoint(x: dx, y: dy)
+            if abs(residual.x) > 0 || abs(residual.y) > 0 {
+                store.mutate { StateReducer.applyWorkspaceDelta(residual, to: &$0) }
+                pushCurrentStateToSystem()
+            }
+            smoothTimer?.cancel()
+            smoothTimer = nil
+            targetOffset = .zero
+            currentOffset = .zero
+            return
+        }
+
+        let step = CGPoint(x: dx * lerpFactor, y: dy * lerpFactor)
+        currentOffset.x += step.x
+        currentOffset.y += step.y
+
+        store.mutate { StateReducer.applyWorkspaceDelta(step, to: &$0) }
+        pushCurrentStateToSystem()
+    }
+
     // MARK: - Private
 
     private func pushCurrentStateToSystem() {
@@ -115,9 +162,11 @@ public final class SpatialStateCore {
         pushToSystem(windows)
     }
 
+    /// Push all window frames to macOS in a single batched pass.
+    /// Deliberately omits per-window focus activation — that would cause visible
+    /// app-switching flicker during continuous gesture events.
     private func pushToSystem(_ windows: [WindowModel]) {
         for window in windows {
-            focusCtrl.focus(pid: window.pid)
             mover.move(window: window, to: window.frame)
         }
         store.mutate { StateReducer.markClean(&$0) }

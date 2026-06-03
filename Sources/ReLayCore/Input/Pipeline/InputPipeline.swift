@@ -21,7 +21,7 @@ public final class InputPipeline {
             normalizer: EventNormalizer(),
             engine:     InputGestureEngine(),
             router:     GestureRouter(),
-            dispatcher: ActionDispatcher()
+            dispatcher: ActionDispatcher.shared
         )
     }
 

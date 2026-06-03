@@ -19,4 +19,13 @@ public enum AppIntent {
 
     /// Restore a previously captured workspace by its stored ID.
     case restoreWorkspace(id: String)
+
+    /// Save the current window arrangement as a named layout preset.
+    case captureLayout(name: String)
+
+    /// Restore a named layout preset by its stored ID.
+    case restoreLayout(id: String)
+
+    /// List all saved layout presets.
+    case listLayouts
 }

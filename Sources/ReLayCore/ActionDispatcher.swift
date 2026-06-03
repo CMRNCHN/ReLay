@@ -1,14 +1,16 @@
 import AppKit
 import CoreGraphics
 
-/// Routes AppIntents to the appropriate subsystem.
-/// All workspace mutations go through SpatialStateCore — never WindowEngine directly.
+/// Thin routing layer: maps AppIntents to the correct subsystem.
+/// Contains zero window logic. All spatial mutations go through SpatialStateCore.
+/// All layout preset operations go through LayoutManager.
 public final class ActionDispatcher {
 
     public static let shared = ActionDispatcher()
 
-    private let core  = SpatialStateCore.shared
-    private let store = WorkspaceStore.shared
+    private let core    = SpatialStateCore.shared
+    private let store   = WorkspaceStore.shared
+    private let layouts = LayoutManager.shared
 
     private init() {}
 
@@ -41,14 +43,25 @@ public final class ActionDispatcher {
             core.captureFromSystem()
             let ws = core.currentState().workspace
             store.save(ws)
-            AppLogger.log("workspace captured and saved id=\(ws.id) name=\(name)", subsystem: "dispatcher")
+            AppLogger.log("workspace captured id=\(ws.id) name=\(name)", subsystem: "dispatcher")
 
         case .restoreWorkspace(let id):
             guard let ws = store.workspace(id: id) else {
-                AppLogger.log("restoreWorkspace: no workspace found for id=\(id)", subsystem: "dispatcher")
+                AppLogger.log("restoreWorkspace: not found id=\(id)", subsystem: "dispatcher")
                 return
             }
             WindowEngine.shared.restore(ws)
+
+        case .captureLayout(let name):
+            let layout = layouts.capture(name: name)
+            AppLogger.log("layout captured '\(name)' id=\(layout.id)", subsystem: "dispatcher")
+
+        case .restoreLayout(let id):
+            layouts.restore(id: id)
+
+        case .listLayouts:
+            let all = layouts.listLayouts()
+            AppLogger.log("layouts: \(all.map { "\($0.name)(\($0.id))" }.joined(separator: ", "))", subsystem: "dispatcher")
         }
     }
 
