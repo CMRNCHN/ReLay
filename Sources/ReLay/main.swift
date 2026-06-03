@@ -26,12 +26,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         _ = SpatialTransitionEngine.shared
         _ = WindowStateStore.shared
+        _ = SpatialStateCore.shared
 
         setupMenuBar()
         titleBarInterceptor.delegate = gestureEngine
 
         checkAccessibilityAndStart()
         checkConflicts()
+        SpatialStateCore.shared.startReconciliation()
 
         NotificationCenter.default.addObserver(self, selector: #selector(toggleInterception), name: NSNotification.Name("ReLayEmergencyStop"), object: nil)
         NotificationCenter.default.addObserver(forName: NSNotification.Name("ReLayInterceptionToggled"), object: nil, queue: .main) { [weak self] note in
@@ -135,6 +137,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         AppLogger.log("application will terminate", subsystem: "startup")
         titleBarInterceptor.stop()
+        SpatialStateCore.shared.stopReconciliation()
     }
 
     private func setupMenuBar() {
