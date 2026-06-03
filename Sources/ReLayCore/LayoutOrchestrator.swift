@@ -2,6 +2,9 @@ import ApplicationServices
 import Cocoa
 import Accessibility
 
+// ONLY VALID FRAME WRITER — all AX frame writes in the system must go through this file.
+// Do not call AXUIElementSetAttributeValue for position/size from any other layer.
+
 /// Low-level animation and AX primitive layer.
 /// No layout semantics, no state machine — pure window manipulation.
 class LayoutOrchestrator {
@@ -178,7 +181,14 @@ class LayoutOrchestrator {
         return CGRect(origin: position, size: size)
     }
 
-    func setWindowFrame(_ window: AXUIElement, frame: CGRect) {
+    func setWindowFrame(_ window: AXUIElement, frame: CGRect, source: String = "unknown") {
+#if DEBUG
+        // GUARD 3 — execution path enforcement
+        // Every frame write should originate from "gesture" or "expose".
+        if source != "gesture" && source != "expose" {
+            AppLogger.log("STRICT: setWindowFrame called with untagged source=\(source)", subsystem: "orchestrator")
+        }
+#endif
         var pos = frame.origin, size = frame.size
         guard let posVal  = AXValueCreate(.cgPoint, &pos),
               let sizeVal = AXValueCreate(.cgSize,  &size) else { return }
@@ -195,7 +205,13 @@ class LayoutOrchestrator {
         return v > 0 ? v : 0.220
     }
 
-    func animateWindowFrame(_ window: AXUIElement, to target: CGRect, duration: TimeInterval? = nil) {
+    func animateWindowFrame(_ window: AXUIElement, to target: CGRect, duration: TimeInterval? = nil, source: String = "unknown") {
+#if DEBUG
+        // GUARD 3 — execution path enforcement
+        if source != "gesture" && source != "expose" {
+            AppLogger.log("STRICT: animateWindowFrame called with untagged source=\(source)", subsystem: "orchestrator")
+        }
+#endif
         let duration = duration ?? snapDuration
         let id = WindowID(element: window)
         activeAnimations[id]?.invalidate()

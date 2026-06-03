@@ -50,6 +50,7 @@ public final class SpatialTransitionEngine {
     // MARK: - Gesture Session Lifecycle
 
     func beginSession(window: AXUIElement, fingerCount: Int, at location: CGPoint, gestureID: UUID = UUID()) {
+        // GESTURE ENTRY
         currentGestureID = gestureID
         AppLogger.log("session begin gesture=\(gestureID.uuidString.prefix(8)) fingers=\(fingerCount)", subsystem: "transition")
         sessionWindow        = window
@@ -97,6 +98,16 @@ public final class SpatialTransitionEngine {
     /// Finalizes the gesture. Dispatches to the state machine (2-finger) or a
     /// multi-window operation (3/4-finger).
     func commitSession(effectiveX: CGFloat, effectiveY: CGFloat, fingerCount: Int, at location: CGPoint) {
+        // GESTURE ENTRY
+#if DEBUG
+        // GUARD 2 — session state sanity
+        if sessionWindow == nil || sessionScreenFrame == .zero {
+            AppLogger.log(
+                "STRICT: commitSession called with invalid session state gesture=\(currentGestureID.uuidString.prefix(8)) window=\(sessionWindow == nil ? "nil" : "ok") screen=\(sessionScreenFrame == .zero ? "zero" : "ok")",
+                subsystem: "transition"
+            )
+        }
+#endif
         defer { clearSession() }
         guard let window = sessionWindow else { return }
         let direction = GestureDirection(effectiveX: effectiveX, effectiveY: effectiveY)
@@ -257,6 +268,16 @@ public final class SpatialTransitionEngine {
     // MARK: - Multi-window Operations
 
     private func executeLayoutExpose(triggerWindow: AXUIElement) {
+        // EXPOSE ENTRY
+#if DEBUG
+        // GUARD 2 — session state sanity
+        if sessionScreenFrame == .zero {
+            AppLogger.log(
+                "STRICT: executeLayoutExpose called with zero screenFrame gesture=\(currentGestureID.uuidString.prefix(8))",
+                subsystem: "transition"
+            )
+        }
+#endif
         AppLogger.log("transition request layout-expose gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "transition")
         PreviewManager.shared.dismiss(animated: false)
         LayoutExposeController.shared.present(triggerWindow: triggerWindow)
@@ -311,6 +332,15 @@ public final class SpatialTransitionEngine {
     }
 
     private func executeAutoLayout(triggerWindow: AXUIElement) {
+#if DEBUG
+        // GUARD 2 — session state sanity
+        if sessionScreenFrame == .zero {
+            AppLogger.log(
+                "STRICT: executeAutoLayout called with zero screenFrame gesture=\(currentGestureID.uuidString.prefix(8))",
+                subsystem: "transition"
+            )
+        }
+#endif
         let screen = sessionScreenFrame != .zero ? sessionScreenFrame : animator.getUsableScreenFrame(for: triggerWindow)
         AppLogger.log("layout resolution request state=fullscreen auto-layout gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "transition")
         let target = resolver.frame(for: .fullscreen, on: screen)
