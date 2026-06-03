@@ -3,7 +3,7 @@ import Cocoa
 import Accessibility
 
 // ReLay integration boundary. Only this layer is allowed to touch ReLay subsystems.
-final class ActionDispatcher {
+final class ActionDispatcher: IntentDispatching {
     func dispatch(_ intent: AppIntent) {
         switch intent {
         case .navigateBack:
@@ -30,7 +30,7 @@ final class ActionDispatcher {
 
         case .moveWorkspace(let delta):
             AppLogger.log("intent: moveWorkspace delta=\(delta)", subsystem: "input")
-            // TODO: connect to ReLay window layout engine for workspace translation
+            SpatialEngine.shared.moveWorkspace(delta: delta)
         }
     }
 

@@ -1,6 +1,6 @@
 import Foundation
 
-struct EventNormalizer {
+struct EventNormalizer: EventNormalizing {
     private let swipeThreshold = 2.0
 
     func normalize(_ raw: RawInputEvent) -> NormalizedEvent? {

@@ -1,7 +1,7 @@
 import CoreGraphics
 
 // Stateful, no UI dependencies, no system calls.
-final class InputGestureEngine {
+final class InputGestureEngine: GestureProcessing {
     private static let bufferCapacity = 10
     private static let swipeVelocityThreshold = 15.0
     private static let pinchInThreshold = -0.05

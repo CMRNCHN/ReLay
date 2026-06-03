@@ -1,7 +1,7 @@
 import CoreGraphics
 
 // Stateless: pure gesture → intent mapping.
-struct GestureRouter {
+struct GestureRouter: GestureRouting {
     func route(_ gesture: InputGesture) -> AppIntent? {
         switch gesture {
         case .twoFingerSwipeLeft:          return .navigateBack
