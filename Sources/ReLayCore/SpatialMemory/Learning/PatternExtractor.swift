@@ -32,7 +32,7 @@ public final class PatternExtractor {
                 $0.similarity(to: incoming) >= Self.mergeThreshold
             }) {
                 candidates[idx].frequency += 1
-                candidates[idx].lastSeen = state.capturedAt
+                candidates[idx].lastSeen = state.lastSystemSnapshot
                 // Update frames toward observed position (moving average, weight = 1/frequency).
                 let weight = 1.0 / Double(candidates[idx].frequency)
                 for (bundleID, frame) in frames {
@@ -60,14 +60,13 @@ public final class PatternExtractor {
 
     // MARK: - Private
 
-    // Linear interpolation between two SpatialFrames for frame averaging.
-    private func lerp(_ a: SpatialFrame, _ b: SpatialFrame, t: Double) -> SpatialFrame {
+    private func lerp(_ a: CGRect, _ b: CGRect, t: Double) -> CGRect {
         let tc = CGFloat(t)
-        return SpatialFrame(
-            x:      a.x      + (b.x      - a.x)      * tc,
-            y:      a.y      + (b.y      - a.y)      * tc,
-            width:  a.width  + (b.width  - a.width)  * tc,
-            height: a.height + (b.height - a.height) * tc
+        return CGRect(
+            x:      a.origin.x + (b.origin.x - a.origin.x) * tc,
+            y:      a.origin.y + (b.origin.y - a.origin.y) * tc,
+            width:  a.width    + (b.width    - a.width)    * tc,
+            height: a.height   + (b.height   - a.height)   * tc
         )
     }
 }

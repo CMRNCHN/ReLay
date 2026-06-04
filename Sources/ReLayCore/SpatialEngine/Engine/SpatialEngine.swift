@@ -1,3 +1,5 @@
+import AppKit
+import ApplicationServices
 import CoreGraphics
 import Accessibility
 
@@ -32,7 +34,7 @@ public final class SpatialEngine {
             frames: frames.map(\.frame),
             delta: delta
         )
-        frames = zip(frames, updated).map { ($0.0.window, $1) }
+        frames = zip(frames, updated).map { pair, newFrame in (window: pair.window, frame: newFrame) }
         bridge.apply(frames)
         AppLogger.log("spatial engine: moveWorkspace delta=\(delta) windows=\(frames.count)", subsystem: "spatial")
     }

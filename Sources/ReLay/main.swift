@@ -149,7 +149,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "Open Layout Exposé", action: #selector(openExpose), keyEquivalent: " "))
+        menu.addItem(NSMenuItem(title: "Open Layout Library", action: #selector(openExpose), keyEquivalent: " "))
         menu.addItem(NSMenuItem(title: "Save Current Layout…", action: #selector(saveCurrentLayout), keyEquivalent: "s"))
         menu.addItem(NSMenuItem(title: "Preferences…", action: #selector(openPreferences), keyEquivalent: ","))
         menu.addItem(NSMenuItem.separator())
@@ -162,7 +162,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openExpose() {
-        LayoutExposeController.shared.present(triggerWindow: getFrontmostWindow())
+        LayoutLibraryController.shared.present(triggerWindow: getFrontmostWindow())
     }
 
     @objc private func openPreferences() {
@@ -182,8 +182,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func saveCurrentLayout() {
-        // Opens Exposé's save dialog pre-filled with the last applied template
-        LayoutExposeController.shared.promptSaveCurrentFromMenu()
+        LayoutLibraryController.shared.promptSaveCurrentFromMenu()
     }
 
     @objc private func toggleInterception() {
