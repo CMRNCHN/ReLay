@@ -143,25 +143,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupMenuBar() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem?.button {
-            let img = NSImage(systemSymbolName: "rectangle.3.group", accessibilityDescription: "ReLay")
-            img?.isTemplate = true   // adapts to light/dark menu bar automatically
+            let img = NSImage(systemSymbolName: "rectangle.3.group", accessibilityDescription: "Pathline")
+            img?.isTemplate = true
             button.image = img
+            button.toolTip = "Pathline"
         }
 
+        // Primary action: click opens Pathline Pulse popover
+        if let item = statusItem {
+            PathlinePulseController.shared.install(into: item)
+        }
+
+        // Right-click / secondary menu for power users
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "Open Layout Library", action: #selector(openExpose), keyEquivalent: " "))
         menu.addItem(NSMenuItem(title: "Save Current Layout…", action: #selector(saveCurrentLayout), keyEquivalent: "s"))
         menu.addItem(NSMenuItem(title: "Preferences…", action: #selector(openPreferences), keyEquivalent: ","))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Undo Last Layout", action: #selector(undoLayout), keyEquivalent: "z"))
-        menu.addItem(NSMenuItem(title: "Shuffle Layout Windows", action: #selector(shuffleLayout), keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "Quit ReLay", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
-
+        menu.addItem(NSMenuItem(title: "Quit Pathline", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem?.menu = menu
     }
 
     @objc private func openExpose() {
+        PathlinePulseController.shared.close()
         LayoutLibraryController.shared.present(triggerWindow: getFrontmostWindow())
     }
 
