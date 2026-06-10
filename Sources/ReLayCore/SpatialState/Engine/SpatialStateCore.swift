@@ -57,8 +57,12 @@ public final class SpatialStateCore {
 
     /// Translate every window in the current workspace by `delta`.
     /// Called by gesture pipeline on continuous scroll events.
-    /// Accumulates into targetOffset; AX writes happen at 60fps via lerp drain.
+    /// Accumulates into targetOffset; AX writes happen at 60fps via lerp drain,
+    /// using AXUIElements resolved once at gesture start (see SpatialEngine).
     public func applyWorkspaceMove(delta: CGPoint) {
+        if !SpatialEngine.shared.hasActiveGestureSession {
+            SpatialEngine.shared.beginGestureSession(windows: store.read().workspace.windows)
+        }
         targetOffset.x += delta.x
         targetOffset.y += delta.y
         startSmoothTimerIfNeeded()
@@ -128,22 +132,24 @@ public final class SpatialStateCore {
         smoothTimer = timer
     }
 
-    /// Each 16ms tick: lerp currentOffset toward targetOffset, apply step to state and AX.
+    /// Each 16ms tick: lerp currentOffset toward targetOffset, apply step via the
+    /// gesture-session AXUIElement cache (write-only AX calls, no per-frame resolution).
     private func drainSmoothStep() {
         let dx = targetOffset.x - currentOffset.x
         let dy = targetOffset.y - currentOffset.y
 
         guard abs(dx) > settleThreshold || abs(dy) > settleThreshold else {
-            // Settled — commit any residual and stop
+            // Settled — commit any residual, end the gesture session, and stop.
             let residual = CGPoint(x: dx, y: dy)
             if abs(residual.x) > 0 || abs(residual.y) > 0 {
-                store.mutate { StateReducer.applyWorkspaceDelta(residual, to: &$0) }
-                pushCurrentStateToSystem()
+                applyStep(residual)
             }
+            SpatialEngine.shared.endGestureSession()
             smoothTimer?.cancel()
             smoothTimer = nil
             targetOffset = .zero
             currentOffset = .zero
+            store.mutate { StateReducer.markClean(&$0) }
             return
         }
 
@@ -151,16 +157,22 @@ public final class SpatialStateCore {
         currentOffset.x += step.x
         currentOffset.y += step.y
 
-        store.mutate { StateReducer.applyWorkspaceDelta(step, to: &$0) }
-        pushCurrentStateToSystem()
+        applyStep(step)
+    }
+
+    /// Apply one lerp step through the cached gesture-session AXUIElements and
+    /// fold the resulting frames back into state.
+    private func applyStep(_ step: CGPoint) {
+        let windows = store.read().workspace.windows
+        let updated = SpatialEngine.shared.applyGestureDelta(step, to: windows)
+        store.mutate { state in
+            state.workspace.windows = updated
+            state.isDirty = true
+            state.version += 1
+        }
     }
 
     // MARK: - Private
-
-    private func pushCurrentStateToSystem() {
-        let windows = store.read().workspace.windows
-        pushToSystem(windows)
-    }
 
     /// Push all window frames to macOS in a single batched pass.
     /// Deliberately omits per-window focus activation — that would cause visible
