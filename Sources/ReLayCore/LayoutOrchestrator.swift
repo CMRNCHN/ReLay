@@ -181,7 +181,10 @@ class LayoutOrchestrator {
         return CGRect(origin: position, size: size)
     }
 
-    func setWindowFrame(_ window: AXUIElement, frame: CGRect, source: String = "unknown") {
+    /// Writes `frame` to `window`. Returns false if the AX element is no longer
+    /// valid (e.g. window closed mid-gesture) so callers can mark it stale.
+    @discardableResult
+    func setWindowFrame(_ window: AXUIElement, frame: CGRect, source: String = "unknown") -> Bool {
 #if DEBUG
         // GUARD 3 — execution path enforcement
         // Every frame write should originate from "gesture" or "expose".
@@ -191,11 +194,12 @@ class LayoutOrchestrator {
 #endif
         var pos = frame.origin, size = frame.size
         guard let posVal  = AXValueCreate(.cgPoint, &pos),
-              let sizeVal = AXValueCreate(.cgSize,  &size) else { return }
+              let sizeVal = AXValueCreate(.cgSize,  &size) else { return false }
         // size → position → size avoids macOS off-screen clamping
-        AXUIElementSetAttributeValue(window, kAXSizeAttribute     as CFString, sizeVal)
-        AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, posVal)
-        AXUIElementSetAttributeValue(window, kAXSizeAttribute     as CFString, sizeVal)
+        let r1 = AXUIElementSetAttributeValue(window, kAXSizeAttribute     as CFString, sizeVal)
+        let r2 = AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, posVal)
+        let r3 = AXUIElementSetAttributeValue(window, kAXSizeAttribute     as CFString, sizeVal)
+        return r1 == .success && r2 == .success && r3 == .success
     }
 
     // MARK: - Spring Animation
