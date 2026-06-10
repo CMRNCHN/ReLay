@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 // A recurring spatial configuration identified across sessions.
@@ -6,7 +7,7 @@ public struct LayoutPattern: Codable, Hashable, Identifiable {
     // Bundle IDs of apps present in this pattern (order-independent key).
     public let appBundleIDs: [String]
     // Bundle ID → last-observed SpatialFrame for that app's primary window.
-    public var windowFrames: [String: SpatialFrame]
+    public var windowFrames: [String: CGRect]
     // How many times this configuration has been observed.
     public var frequency: Int
     // 0–1: fraction of observations this pattern was complete vs. partial.
@@ -16,7 +17,7 @@ public struct LayoutPattern: Codable, Hashable, Identifiable {
     public init(
         id: UUID = UUID(),
         appBundleIDs: [String],
-        windowFrames: [String: SpatialFrame],
+        windowFrames: [String: CGRect],
         frequency: Int = 1,
         confidence: Double = 0,
         lastSeen: Date = Date()

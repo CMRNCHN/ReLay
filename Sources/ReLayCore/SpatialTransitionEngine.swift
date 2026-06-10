@@ -280,7 +280,7 @@ public final class SpatialTransitionEngine {
 #endif
         AppLogger.log("transition request layout-expose gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "transition")
         PreviewManager.shared.dismiss(animated: false)
-        LayoutExposeController.shared.present(triggerWindow: triggerWindow)
+        LayoutLibraryController.shared.present(triggerWindow: triggerWindow)
     }
     
     func registerExposeState(template: LayoutTemplate, windows: [AXUIElement], screenFrame: CGRect) {

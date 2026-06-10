@@ -232,12 +232,12 @@ public final class TitleBarInterceptor {
                 let keyCode  = nsEvent.keyCode
 
                 // Route navigation keys to expose while it is open (swallows them)
-                if LayoutExposeController.shared.isPresented {
+                if LayoutLibraryController.shared.isPresented {
                     switch keyCode {
                     case 53, 36, 76, 123, 124, 125, 126:
                         let code = keyCode
                         DispatchQueue.main.async {
-                            LayoutExposeController.shared.handleKeyCode(code)
+                            LayoutLibraryController.shared.handleKeyCode(code)
                         }
                         return nil // Swallow
                     default:
@@ -248,7 +248,7 @@ public final class TitleBarInterceptor {
                 // Global shortcut: Ctrl+Option+Space opens Layout Exposé
                 if modifiers == [.control, .option] && keyCode == 49 {
                     DispatchQueue.main.async {
-                        LayoutExposeController.shared.present(triggerWindow: self.getFrontmostWindow())
+                        LayoutLibraryController.shared.present(triggerWindow: self.getFrontmostWindow())
                     }
                     return nil // Swallow
                 }
@@ -332,7 +332,7 @@ public final class TitleBarInterceptor {
                 if y < -50 {
                     AppLogger.log("3-finger swipe down detected; presenting expose", subsystem: "interceptor")
                     DispatchQueue.main.async {
-                        LayoutExposeController.shared.present(triggerWindow: self.getFrontmostWindow())
+                        LayoutLibraryController.shared.present(triggerWindow: self.getFrontmostWindow())
                     }
                 }
                 return nil
