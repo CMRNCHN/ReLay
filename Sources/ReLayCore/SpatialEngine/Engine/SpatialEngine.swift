@@ -9,9 +9,26 @@ public final class SpatialEngine {
     private let layoutEngine = LayoutEngine()
     private let bridge = SpatialToWindowBridge()
     private let normalizer = DisplayNormalizer()
+    private let mover = WindowMover()
 
     // Keyed by window identity so we don't hold strong AXUIElement references in a dict.
     private var frames: [(window: AXUIElement, frame: SpatialFrame)] = []
+
+    // MARK: - Gesture Session
+    //
+    // AXUIElement resolution happens once per gesture (beginGestureSession), not
+    // per frame. The 60fps lerp drain in SpatialStateCore calls applyGestureDelta,
+    // which only performs write-only AX calls (setWindowFrame) against the cached
+    // elements — no AXUIElementCopyAttributeValue lookups in the hot loop.
+    private struct GestureTarget {
+        var window: AXUIElement
+        var frame: CGRect
+        var stale: Bool = false
+        var reresolveAttempted: Bool = false
+    }
+    private var gestureTargets: [String: GestureTarget] = [:]
+
+    public var hasActiveGestureSession: Bool { !gestureTargets.isEmpty }
 
     private init() {}
 
@@ -68,6 +85,61 @@ public final class SpatialEngine {
         }
         capture(windows: pairs)
         AppLogger.log("spatial engine: resynced \(pairs.count) windows", subsystem: "spatial")
+    }
+
+    // MARK: - Gesture Session API
+
+    /// Resolve AXUIElements for every window once, at gesture start.
+    /// A no-op if a session is already active (idempotent across repeated
+    /// applyWorkspaceMove calls within the same gesture).
+    public func beginGestureSession(windows: [WindowModel]) {
+        guard gestureTargets.isEmpty else { return }
+        for model in windows {
+            guard let ax = mover.findAXWindow(for: model) else { continue }
+            gestureTargets[model.id] = GestureTarget(window: ax, frame: model.frame)
+        }
+        AppLogger.log(
+            "spatial engine: gesture session started resolved=\(gestureTargets.count)/\(windows.count)",
+            subsystem: "spatial"
+        )
+    }
+
+    /// Apply `delta` to every resolved window via write-only AX calls.
+    /// Returns updated WindowModels (new frames) for the caller to sync into state.
+    /// If a write fails (window closed mid-gesture), the target is marked stale and
+    /// re-resolved exactly once on the next call — never retried within a frame.
+    @discardableResult
+    public func applyGestureDelta(_ delta: CGPoint, to windows: [WindowModel]) -> [WindowModel] {
+        windows.map { model -> WindowModel in
+            var model = model
+            guard var target = gestureTargets[model.id] else { return model }
+
+            if target.stale && !target.reresolveAttempted {
+                target.reresolveAttempted = true
+                if let ax = mover.findAXWindow(for: model) {
+                    target.window = ax
+                    target.stale  = false
+                }
+            }
+
+            target.frame = target.frame.offsetBy(dx: delta.x, dy: delta.y)
+            model.frame  = target.frame
+
+            if !target.stale {
+                let success = LayoutOrchestrator.shared.setWindowFrame(target.window, frame: target.frame, source: "gesture")
+                target.stale = !success
+            }
+
+            gestureTargets[model.id] = target
+            return model
+        }
+    }
+
+    /// Clear cached AX references. Call once the gesture has settled.
+    public func endGestureSession() {
+        guard !gestureTargets.isEmpty else { return }
+        AppLogger.log("spatial engine: gesture session ended count=\(gestureTargets.count)", subsystem: "spatial")
+        gestureTargets.removeAll()
     }
 
     // MARK: - Private
