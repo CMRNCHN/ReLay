@@ -2,6 +2,9 @@ import ApplicationServices
 import Cocoa
 import Accessibility
 
+// ONLY VALID FRAME WRITER — all AX frame writes in the system must go through this file.
+// Do not call AXUIElementSetAttributeValue for position/size from any other layer.
+
 /// Low-level animation and AX primitive layer.
 /// No layout semantics, no state machine — pure window manipulation.
 class LayoutOrchestrator {
@@ -50,20 +53,62 @@ class LayoutOrchestrator {
         var result: [AXUIElement] = []
         for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
             let axApp = AXUIElementCreateApplication(app.processIdentifier)
+
+            // Some apps (Electron, custom-chrome) require AXEnhancedUserInterface before
+            // their window list and frame attributes become accessible via AX.
+            AXUIElementSetAttributeValue(axApp, "AXEnhancedUserInterface" as CFString, true as CFTypeRef)
+
             var ref: CFTypeRef?
             guard AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &ref) == .success,
                   let list = ref as? [AXUIElement] else { continue }
             for window in list {
+                // Skip minimized
                 var minRef: CFTypeRef?
                 if AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &minRef) == .success,
                    let isMin = minRef as? Bool, isMin { continue }
+                // Skip fullscreen
                 var fsRef: CFTypeRef?
                 if AXUIElementCopyAttributeValue(window, "AXFullScreen" as CFString, &fsRef) == .success,
                    let isFS = fsRef as? Bool, isFS { continue }
+                // Skip Finder desktop window (subrole AXUnknown + covers full screen)
+                var subroleRef: CFTypeRef?
+                if AXUIElementCopyAttributeValue(window, kAXSubroleAttribute as CFString, &subroleRef) == .success,
+                   let subrole = subroleRef as? String,
+                   subrole == "AXUnknown" {
+                    // Check if it's screen-sized (desktop window)
+                    if let frame = getWindowFrame(window),
+                       let screen = NSScreen.screens.first,
+                       frame.width >= screen.frame.width * 0.95 {
+                        continue
+                    }
+                }
                 result.append(window)
             }
         }
+        AppLogger.log("expose: enumerated \(result.count) visible windows across \(NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }.count) apps", subsystem: "expose")
         return result
+    }
+
+    func windowTitle(for window: AXUIElement) -> String {
+        var titleRef: CFTypeRef?
+        if AXUIElementCopyAttributeValue(window, kAXTitleAttribute as CFString, &titleRef) == .success,
+           let title = titleRef as? String,
+           !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return title
+        }
+
+        var appRef: CFTypeRef?
+        if AXUIElementCopyAttributeValue(window, kAXParentAttribute as CFString, &appRef) == .success,
+           let app = appRef {
+            var appTitleRef: CFTypeRef?
+            if AXUIElementCopyAttributeValue(app as! AXUIElement, kAXTitleAttribute as CFString, &appTitleRef) == .success,
+               let appTitle = appTitleRef as? String,
+               !appTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return appTitle
+            }
+        }
+
+        return "Window"
     }
 
     // MARK: - Stage Manager
@@ -93,17 +138,29 @@ class LayoutOrchestrator {
 
     // MARK: - Screen Frame
 
-    func getUsableScreenFrame(for window: AXUIElement) -> CGRect {
+    func getUsableScreenFrame(for window: AXUIElement, at point: CGPoint? = nil) -> CGRect {
         guard let primary = NSScreen.screens.first else { return .zero }
         var target = NSScreen.main ?? primary
 
-        if let frame = getWindowFrame(window) {
-            let center = CGPoint(x: frame.midX, y: frame.midY)
+        if let point = point {
             for screen in NSScreen.screens {
                 let axY = primary.frame.height - (screen.frame.origin.y + screen.frame.height)
                 let axFrame = CGRect(x: screen.frame.origin.x, y: axY,
                                      width: screen.frame.width, height: screen.frame.height)
-                if axFrame.contains(center) { target = screen; break }
+                if axFrame.contains(point) { target = screen; break }
+            }
+        } else if let frame = getWindowFrame(window) {
+            var maxArea: CGFloat = -1
+            for screen in NSScreen.screens {
+                let axY = primary.frame.height - (screen.frame.origin.y + screen.frame.height)
+                let axFrame = CGRect(x: screen.frame.origin.x, y: axY,
+                                     width: screen.frame.width, height: screen.frame.height)
+                let intersection = axFrame.intersection(frame)
+                let area = intersection.width * intersection.height
+                if area > maxArea {
+                    maxArea = area
+                    target = screen
+                }
             }
         }
 
@@ -124,19 +181,42 @@ class LayoutOrchestrator {
         return CGRect(origin: position, size: size)
     }
 
-    private func setWindowFrame(_ window: AXUIElement, frame: CGRect) {
+    /// Writes `frame` to `window`. Returns false if the AX element is no longer
+    /// valid (e.g. window closed mid-gesture) so callers can mark it stale.
+    @discardableResult
+    func setWindowFrame(_ window: AXUIElement, frame: CGRect, source: String = "unknown") -> Bool {
+#if DEBUG
+        // GUARD 3 — execution path enforcement
+        // Every frame write should originate from "gesture" or "expose".
+        if source != "gesture" && source != "expose" {
+            AppLogger.log("STRICT: setWindowFrame called with untagged source=\(source)", subsystem: "orchestrator")
+        }
+#endif
         var pos = frame.origin, size = frame.size
         guard let posVal  = AXValueCreate(.cgPoint, &pos),
-              let sizeVal = AXValueCreate(.cgSize,  &size) else { return }
+              let sizeVal = AXValueCreate(.cgSize,  &size) else { return false }
         // size → position → size avoids macOS off-screen clamping
-        AXUIElementSetAttributeValue(window, kAXSizeAttribute     as CFString, sizeVal)
-        AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, posVal)
-        AXUIElementSetAttributeValue(window, kAXSizeAttribute     as CFString, sizeVal)
+        let r1 = AXUIElementSetAttributeValue(window, kAXSizeAttribute     as CFString, sizeVal)
+        let r2 = AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, posVal)
+        let r3 = AXUIElementSetAttributeValue(window, kAXSizeAttribute     as CFString, sizeVal)
+        return r1 == .success && r2 == .success && r3 == .success
     }
 
     // MARK: - Spring Animation
 
-    func animateWindowFrame(_ window: AXUIElement, to target: CGRect, duration: TimeInterval = 0.220, sessionID: String) {
+    private var snapDuration: TimeInterval {
+        let v = UserDefaults.standard.double(forKey: "snapDuration")
+        return v > 0 ? v : 0.220
+    }
+
+    func animateWindowFrame(_ window: AXUIElement, to target: CGRect, duration: TimeInterval? = nil, source: String = "unknown") {
+#if DEBUG
+        // GUARD 3 — execution path enforcement
+        if source != "gesture" && source != "expose" {
+            AppLogger.log("STRICT: animateWindowFrame called with untagged source=\(source)", subsystem: "orchestrator")
+        }
+#endif
+        let duration = duration ?? snapDuration
         let id = WindowID(element: window)
         activeAnimations[id]?.invalidate()
 

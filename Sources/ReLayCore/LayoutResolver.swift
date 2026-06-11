@@ -4,11 +4,15 @@ import CoreGraphics
 // MARK: - CGRect tolerance comparison
 
 extension CGRect {
-    func approximatelyEquals(_ other: CGRect, tolerance: CGFloat = 20) -> Bool {
-        return abs(origin.x - other.origin.x) <= tolerance
-            && abs(origin.y - other.origin.y) <= tolerance
-            && abs(width  - other.width)       <= tolerance
-            && abs(height - other.height)      <= tolerance
+    // Tolerance scales with screen width so inference works equally well on
+    // 13" MacBooks and 6K Pro Display XDRs. 1.5% of screen width ≈ 20pt on
+    // a 1440-wide display, ~30pt on a 5K display.
+    func approximatelyEquals(_ other: CGRect, relativeTo screenWidth: CGFloat) -> Bool {
+        let tol = max(10, screenWidth * 0.015)
+        return abs(origin.x - other.origin.x) <= tol
+            && abs(origin.y - other.origin.y) <= tol
+            && abs(width  - other.width)       <= tol
+            && abs(height - other.height)      <= tol
     }
 }
 
@@ -80,7 +84,7 @@ class LayoutResolver {
         let candidates = WindowLayoutState.allCases.filter { $0 != .floating }
         for state in candidates {
             let expected = self.frame(for: state, on: screen)
-            if frame.approximatelyEquals(expected) {
+            if frame.approximatelyEquals(expected, relativeTo: screen.width) {
                 return state
             }
         }

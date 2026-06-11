@@ -2,11 +2,11 @@
 
 ## Task Title
 
-Implement SessionID tracking (Phase 1: Core Implementation)
+Settings rework + new settings + Phase 3 runtime observability
 
 ## Request Date
 
-2026-05-19
+2026-05-28
 
 ## Status
 
@@ -14,78 +14,90 @@ PHASE_1_COMPLETE (8/8 steps) - Ready for Phase 2 Integration Verification
 
 ## Objective
 
-Bundle the full current repository state into a single commit and generate a commit message that matches the actual included work.
+Rework the Settings UI to be understandable by non-technical users, add new behavior
+settings (snap speed, haptics, center snap, configurable swipe actions), and add
+per-gesture correlation IDs to all log lines (Phase 3 observability).
 
-## Start-Of-Task Review Summary
+## Work Done
 
-- reviewed the required governance and RepoDock task surfaces
-- inspected the remaining tracked and untracked worktree changes after the earlier `.ai` and naming cleanup commits
-- confirmed the remaining scope includes runtime source changes, new support files, tests, and repo tooling/config files
+### Settings Rework — `Sources/ReLay/SettingsWindow.swift`
 
-## Constraints
+Complete rewrite of the settings UI:
 
-- include the full current worktree as requested
-- do not rewrite or selectively clean unrelated runtime changes during the commit task
-- keep the commit message aligned with the dominant technical changes
+- Renamed all four existing settings to plain-English titles with human-readable
+  descriptions. Removed raw unit labels ("pt", "pt/s"). Added semantic endpoint labels
+  below each slider track (e.g. `Responsive ←→ Deliberate`).
+- Added "Feel" preset strip (Careful / Balanced / Snappy) as a segmented control at the
+  top of the panel — sets all five sliders at once.
+- Added **Snap Speed** slider (0.08–0.45s, `snapDuration` key, Instant ←→ Smooth).
+- Added **Snap Haptics** toggle (`snapHapticsEnabled` Bool, on by default).
+- Added **Center Snap** toggle (`centerSnapEnabled` Bool, off by default) — routes
+  floating-window horizontal swipes to center before halves.
+- Added **Swipe Actions** row with two `NSPopUpButton`s for configuring up-swipe and
+  down-swipe behavior independently (Fullscreen/Minimize/Center/Nothing).
+- Window height expanded to 620px with `NSScrollView` wrapper.
 
-## Files Expected To Change
+### Core Settings Wiring
 
-- `.ai/REPODOCK/*`
-- `Sources/ReLay/*`
-- `Sources/ReLayCore/*`
-- `Tests/*`
-- repo tooling/config files under `.air/`, `.claude/`, `.junie/`, `.vscode/`
+- Added `Sources/ReLayCore/ReLaySettings.swift` — centralized UserDefaults accessors.
+- `LayoutOrchestrator.swift` — animation duration reads from `snapDuration` UserDefault.
+- `GestureEngine.swift` — all 3 haptic sites gated on `ReLaySettings.hapticsEnabled`.
+- `SpatialTransitionEngine.swift` — all 2 haptic sites gated; up/down swipe dispatched
+  to `executeUpSwipeAction`/`executeDownSwipeAction` which read UserDefaults; added
+  `executeTransitionTo(_:window:)` for direct-state snaps; graph re-instantiated on
+  `ReLaySettingsChanged` to pick up `centerSnapEnabled`.
+- `WindowLayoutState.swift` — `LayoutTransitionGraph.init(centerSnap:)` parameter added;
+  when `centerSnap == true`, `floating → center` replaces `floating → leftHalf/rightHalf`.
 
-## Files Actually Changed
+### Phase 3 — Per-gesture Correlation IDs
 
-- `.ai/REPODOCK/TASKS/CURRENT_TASK.md`
-- `.ai/REPODOCK/HANDOFFS/LATEST_HANDOFF.md`
-- `.ai/REPODOCK/LOGS/2026-05-15_full-worktree-commit.md`
-- `.junie/memory/*`
-- `.air/*`
-- `.claude/settings.json`
-- `.vscode/launch.json`
-- `Sources/ReLay/main.swift`
-- `Sources/ReLayCore/AccessibilityBootstrap.swift`
-- `Sources/ReLayCore/AppLogger.swift`
-- `Sources/ReLayCore/GestureEngine.swift`
-- `Sources/ReLayCore/LayoutResolver.swift`
-- `Sources/ReLayCore/SpatialTransitionEngine.swift`
-- `Sources/ReLayCore/TitleBarInterceptor.swift`
-- `Sources/ReLayCore/WindowStateStore.swift`
-- `Tests/ReLayCoreTests/ReLayCoreTests.swift`
+Every log line for a single gesture now shares an 8-char prefix of a `UUID`:
 
-## Verification Performed
+- `TitleBarInterceptor.swift` — UUID created at hit-accept (`pendingGestureID`), logged
+  on the `title bar hit` line, passed to the delegate via the updated protocol signature
+  `gestureDidBegin(on:at:fingerCount:shiftHeld:gestureID:)`.
+- `GestureEngine.swift` — stores `currentGestureID` from the protocol callback; passes
+  it to `SpatialTransitionEngine.beginSession(window:fingerCount:at:gestureID:)`; logs
+  it on begin and commit.
+- `SpatialTransitionEngine.swift` — stores `currentGestureID`; logs `gesture=` prefix
+  on all key lines: begin, commit, cancel, state transitions, enlarge, minimize, and
+  direct-state transitions.
 
-- inspected current `git status`
-- reviewed the remaining diff summary before staging
-- confirmed the worktree still includes an in-flight compile issue in `TitleBarInterceptor.swift`
-- staged the full current worktree for commit
+Log format example for one gesture:
+```
+[interceptor] title bar hit gesture=a3f82c1b ...
+[gesture]     gesture began gesture=a3f82c1b ...
+[gesture]     gesture committed gesture=a3f82c1b ...
+[transition]  transition request gesture=a3f82c1b ...
+[transition]  state transition gesture=a3f82c1b floating -> leftHalf
+[transition]  layout resolution gesture=a3f82c1b state=leftHalf
+```
 
 ## Architecture Boundaries Touched
 
-- app bootstrap
-- gesture layer
-- transition layer
-- resolver layer
-- state store
-- accessibility/bootstrap support
-- runtime logging/diagnostics
-- governance and tooling metadata
+- `Sources/ReLay/SettingsWindow.swift`
+- `Sources/ReLayCore/ReLaySettings.swift` (new file)
+- `Sources/ReLayCore/LayoutOrchestrator.swift`
+- `Sources/ReLayCore/GestureEngine.swift`
+- `Sources/ReLayCore/SpatialTransitionEngine.swift`
+- `Sources/ReLayCore/TitleBarInterceptor.swift`
+- `Sources/ReLayCore/WindowLayoutState.swift`
 
-## Behavior Changes
+## Build / Test Status
 
-- runtime now includes added bootstrap and logging support files
-- gesture ingress and transition tracing changes are included
-- repo tooling and local workflow config files are included in the snapshot
-- this commit does not guarantee a passing build; current compile status remains a known issue
+- `swift build`: passing
+- `swift test`: 70 passing, 0 failures
 
 ## Risks / Follow-Ups
 
-- this snapshot commit includes work that is not yet build-clean
-- local tool configuration files are being committed as part of the requested full snapshot
-- next work should restore compile health before further runtime claims
+- Live gesture matrix verification (Finder, Safari, Terminal, Xcode, System Settings)
+  still pending — run ReLay and collect logs per GESTURE_INGRESS_MATRIX.md.
+- Xcode topBand may still need a bump to 96px if geometric misses appear on large displays.
+- Scenario tests reference `testNeutralStatesGoLeftToLeftHalf` and
+  `testNeutralStatesGoRightToRightHalf` — these test the default (centerSnap=false) path
+  and continue to pass. A matching `centerSnap=true` test suite would be a good addition.
 
 ## Next Task Recommendation
 
-Fix the `TitleBarInterceptor.swift` compile failure and bring `swift build` / `swift test` back to green.
+1. Run ReLay on device and verify gesture matrix against GESTURE_INGRESS_MATRIX.md.
+2. Add scenario tests for `centerSnap=true` graph behavior.

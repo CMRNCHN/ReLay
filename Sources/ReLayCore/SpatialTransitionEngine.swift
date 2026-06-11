@@ -10,7 +10,7 @@ import Accessibility
 public final class SpatialTransitionEngine {
     public static let shared = SpatialTransitionEngine()
 
-    private let graph    = LayoutTransitionGraph()
+    private var graph    = LayoutTransitionGraph(centerSnap: ReLaySettings.centerSnapEnabled)
     private let store    = WindowStateStore.shared
     private let resolver = LayoutResolver.shared
     private let animator = LayoutOrchestrator.shared
@@ -21,33 +21,48 @@ public final class SpatialTransitionEngine {
     private var sessionStartFrame:    CGRect = .zero
     private var sessionFingerCount:   Int    = 2
     private var sessionStartLocation: CGPoint = .zero
-    private var activeSessionID:      String?
+    private var sessionScreenFrame:   CGRect = .zero
 
     // MARK: - Multi-window Layout State
 
+    private var currentGestureID: UUID = UUID()
     private var tiledEntries: [(window: AXUIElement, original: CGRect)] = []
     private var stageManagerWasEnabled: Bool = false
     private var isInTiledMode: Bool { !tiledEntries.isEmpty }
+    
+    private var lastExposeUndoFrames: [WindowID: CGRect]?
+    private var lastExposeState: (template: LayoutTemplate, windows: [AXUIElement], screenFrame: CGRect)?
 
+    public var canUndo: Bool { lastExposeUndoFrames != nil }
+    public var canShuffle: Bool { (lastExposeState?.windows.count ?? 0) >= 2 }
+    
     private init() {
         AppLogger.log("spatial transition engine initialized", subsystem: "transition")
+        NotificationCenter.default.addObserver(
+            forName: NSNotification.Name("ReLaySettingsChanged"),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.graph = LayoutTransitionGraph(centerSnap: ReLaySettings.centerSnapEnabled)
+        }
     }
 
     // MARK: - Gesture Session Lifecycle
 
-    func beginSession(window: AXUIElement, fingerCount: Int, at location: CGPoint, sessionID: String) {
-        self.activeSessionID = sessionID
-        AppLogger.log("session begin fingers=\(fingerCount)", sessionID: sessionID, subsystem: "transition")
+    func beginSession(window: AXUIElement, fingerCount: Int, at location: CGPoint, gestureID: UUID = UUID()) {
+        // GESTURE ENTRY
+        currentGestureID = gestureID
+        AppLogger.log("session begin gesture=\(gestureID.uuidString.prefix(8)) fingers=\(fingerCount)", subsystem: "transition")
         sessionWindow        = window
         sessionFingerCount   = fingerCount
         sessionStartLocation = location
         sessionStartFrame    = animator.getWindowFrame(window) ?? .zero
+        sessionScreenFrame   = animator.getUsableScreenFrame(for: window, at: location)
 
         // Bootstrap the state store if this window hasn't been seen before.
         if store.record(for: window) == nil {
-            let screen   = animator.getUsableScreenFrame(for: window)
-            let inferred = resolver.inferState(from: sessionStartFrame, on: screen)
-            AppLogger.log("bootstrapped window state=\(inferred)", sessionID: sessionID, subsystem: "transition")
+            let inferred = resolver.inferState(from: sessionStartFrame, on: sessionScreenFrame)
+            AppLogger.log("bootstrapped window state=\(inferred) gesture=\(gestureID.uuidString.prefix(8))", subsystem: "transition")
             let record   = WindowRecord(
                 currentState: inferred,
                 floatingFrame: inferred == .floating ? sessionStartFrame : nil
@@ -76,8 +91,7 @@ public final class SpatialTransitionEngine {
             return
         }
 
-        let screen      = animator.getUsableScreenFrame(for: window)
-        let targetFrame = targetFrame(for: nextState, window: window, screen: screen)
+        let targetFrame = targetFrame(for: nextState, window: window, screen: sessionScreenFrame)
         PreviewManager.shared.updateOverlay(
             currentFrame: sessionStartFrame,
             targetFrame:  targetFrame,
@@ -88,13 +102,22 @@ public final class SpatialTransitionEngine {
 
     /// Finalizes the gesture. Dispatches to the state machine (2-finger) or a
     /// multi-window operation (3/4-finger).
-    func commitSession(effectiveX: CGFloat, effectiveY: CGFloat, fingerCount: Int, at location: CGPoint, sessionID: String) {
+    func commitSession(effectiveX: CGFloat, effectiveY: CGFloat, fingerCount: Int, at location: CGPoint) {
+        // GESTURE ENTRY
+#if DEBUG
+        // GUARD 2 — session state sanity
+        if sessionWindow == nil || sessionScreenFrame == .zero {
+            AppLogger.log(
+                "STRICT: commitSession called with invalid session state gesture=\(currentGestureID.uuidString.prefix(8)) window=\(sessionWindow == nil ? "nil" : "ok") screen=\(sessionScreenFrame == .zero ? "zero" : "ok")",
+                subsystem: "transition"
+            )
+        }
+#endif
         defer { clearSession() }
         guard let window = sessionWindow else { return }
         let direction = GestureDirection(effectiveX: effectiveX, effectiveY: effectiveY)
         AppLogger.log(
-            "transition request fingers=\(fingerCount) direction=\(direction.map { String(describing: $0) } ?? "none")",
-            sessionID: sessionID,
+            "transition request gesture=\(currentGestureID.uuidString.prefix(8)) fingers=\(fingerCount) direction=\(direction.map { String(describing: $0) } ?? "none")",
             subsystem: "transition"
         )
 
@@ -105,26 +128,60 @@ public final class SpatialTransitionEngine {
                 executeStageManagerLayout(triggerWindow: window, sessionID: sessionID)
             }
         } else if fingerCount == 3 {
-            if let dir = direction, dir == .down, isNearScreenCenter(location) {
-                executeThreeColumnLayout(triggerWindow: window, sessionID: sessionID)
+            if let dir = direction, dir == .down {
+                executeLayoutExpose(triggerWindow: window)
             } else {
                 executeAutoLayout(triggerWindow: window, sessionID: sessionID)
             }
         } else {
-            guard let dir = direction else { cancelSession(sessionID: sessionID); return }
-            executeStateTransition(direction: dir, for: window, sessionID: sessionID)
+            guard let dir = direction else { cancelSession(); return }
+            switch dir {
+            case .up:
+                executeUpSwipeAction(window: window)
+            case .down:
+                executeDownSwipeAction(window: window)
+            case .left, .right:
+                executeStateTransition(direction: dir, for: window)
+            }
         }
     }
 
     func cancelSession(sessionID: String) {
         defer { clearSession() }
-        AppLogger.log("transition session cancelled", sessionID: sessionID, subsystem: "transition")
+        AppLogger.log("transition session cancelled gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "transition")
         guard let window = sessionWindow, !sessionStartFrame.isEmpty else {
             PreviewManager.shared.dismiss(animated: true, sessionID: sessionID)
             return
         }
         animator.animateWindowFrame(window, to: sessionStartFrame, duration: 0.120, sessionID: sessionID)
         PreviewManager.shared.dismiss(animated: true, sessionID: sessionID)
+    }
+
+    // MARK: - Shift Live Resize
+
+    /// Called on every scroll delta while shift is held. Resizes the window height
+    /// in place (top-left anchored) with no snap — smooth like a scroll.
+    func applyResizeDelta(deltaY: CGFloat) {
+        guard let window = sessionWindow,
+              var frame = animator.getWindowFrame(window) else { return }
+        let scale: CGFloat = 2.0
+        let newHeight = max(150, frame.size.height + deltaY * scale)
+        frame.size.height = newHeight
+        animator.setWindowFrame(window, frame: frame)
+    }
+
+    func endResizeSession() {
+        AppLogger.log("shift resize session ended gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "transition")
+        PreviewManager.shared.dismiss(animated: false)
+        clearSession()
+    }
+
+    func cancelResizeSession() {
+        defer { clearSession() }
+        AppLogger.log("shift resize session cancelled; restoring frame gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "transition")
+        guard let window = sessionWindow, !sessionStartFrame.isEmpty else { return }
+        animator.animateWindowFrame(window, to: sessionStartFrame, duration: 0.120)
+        PreviewManager.shared.dismiss(animated: true)
     }
 
     // MARK: - 2-finger State Transition
@@ -134,14 +191,14 @@ public final class SpatialTransitionEngine {
         let currentState = record.currentState
 
         guard let nextState = graph.nextState(from: currentState, moving: direction) else {
-            AppLogger.log("no transition available from=\(currentState) direction=\(direction)", sessionID: sessionID, subsystem: "transition")
+            AppLogger.log("no transition available gesture=\(currentGestureID.uuidString.prefix(8)) from=\(currentState) direction=\(direction)", subsystem: "transition")
             // Edge of the graph — snap back
             animator.animateWindowFrame(window, to: sessionStartFrame, duration: 0.120, sessionID: sessionID)
             PreviewManager.shared.dismiss(animated: true, sessionID: sessionID)
             return
         }
 
-        AppLogger.log("state transition request \(currentState) -> \(nextState)", sessionID: sessionID, subsystem: "transition")
+        AppLogger.log("state transition gesture=\(currentGestureID.uuidString.prefix(8)) \(currentState) -> \(nextState)", subsystem: "transition")
 
         // Capture floating frame before first managed placement
         if currentState == .floating, record.floatingFrame == nil {
@@ -151,19 +208,146 @@ public final class SpatialTransitionEngine {
         record.transition(to: nextState)
         store.setRecord(record, for: window, sessionID: sessionID)
 
-        let screen      = animator.getUsableScreenFrame(for: window)
-        AppLogger.log("layout resolution request state=\(nextState)", sessionID: sessionID, subsystem: "transition")
-        let targetFrame = targetFrame(for: nextState, window: window, screen: screen)
+        AppLogger.log("layout resolution gesture=\(currentGestureID.uuidString.prefix(8)) state=\(nextState)", subsystem: "transition")
+        let targetFrame = targetFrame(for: nextState, window: window, screen: sessionScreenFrame)
 
         PreviewManager.shared.commitOverlay(finalFrame: targetFrame, sessionID: sessionID)
         animator.animateWindowFrame(window, to: targetFrame, sessionID: sessionID)
     }
 
+    // MARK: - 2-finger Vertical Actions
+
+    private func executeEnlarge(window: AXUIElement) {
+        AppLogger.log("transition request enlarge gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "transition")
+        let screen = sessionScreenFrame != .zero ? sessionScreenFrame : animator.getUsableScreenFrame(for: window)
+        let target = resolver.frame(for: .fullscreen, on: screen)
+
+        if var record = store.record(for: window) {
+            if record.floatingFrame == nil { record.floatingFrame = sessionStartFrame }
+            record.transition(to: .fullscreen)
+            store.setRecord(record, for: window)
+        }
+
+        if ReLaySettings.hapticsEnabled { NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now) }
+        PreviewManager.shared.commitOverlay(finalFrame: target)
+        animator.animateWindowFrame(window, to: target)
+    }
+
+    private func executeMinimize(window: AXUIElement) {
+        AppLogger.log("transition request minimize gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "transition")
+        if ReLaySettings.hapticsEnabled { NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now) }
+        PreviewManager.shared.dismiss(animated: false)
+        AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanTrue)
+    }
+
+    private func executeTransitionTo(_ state: WindowLayoutState, window: AXUIElement) {
+        AppLogger.log("transition request direct gesture=\(currentGestureID.uuidString.prefix(8)) state=\(state)", subsystem: "transition")
+        let screen = sessionScreenFrame != .zero ? sessionScreenFrame : animator.getUsableScreenFrame(for: window)
+        let target = targetFrame(for: state, window: window, screen: screen)
+        if var record = store.record(for: window) {
+            if record.floatingFrame == nil { record.floatingFrame = sessionStartFrame }
+            record.transition(to: state)
+            store.setRecord(record, for: window)
+        }
+        if ReLaySettings.hapticsEnabled { NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now) }
+        PreviewManager.shared.commitOverlay(finalFrame: target)
+        animator.animateWindowFrame(window, to: target)
+    }
+
+    private func executeUpSwipeAction(window: AXUIElement) {
+        switch ReLaySettings.upSwipeAction {
+        case .center:   executeTransitionTo(.center, window: window)
+        case .nothing:  cancelSession()
+        default:        executeEnlarge(window: window)
+        }
+    }
+
+    private func executeDownSwipeAction(window: AXUIElement) {
+        switch ReLaySettings.downSwipeAction {
+        case .center:   executeTransitionTo(.center, window: window)
+        case .nothing:  cancelSession()
+        default:        executeMinimize(window: window)
+        }
+    }
+
     // MARK: - Multi-window Operations
 
-    private func executeAutoLayout(triggerWindow: AXUIElement, sessionID: String) {
-        let screen = animator.getUsableScreenFrame(for: triggerWindow)
-        AppLogger.log("layout resolution request state=fullscreen auto-layout", sessionID: sessionID, subsystem: "transition")
+    private func executeLayoutExpose(triggerWindow: AXUIElement) {
+        // EXPOSE ENTRY
+#if DEBUG
+        // GUARD 2 — session state sanity
+        if sessionScreenFrame == .zero {
+            AppLogger.log(
+                "STRICT: executeLayoutExpose called with zero screenFrame gesture=\(currentGestureID.uuidString.prefix(8))",
+                subsystem: "transition"
+            )
+        }
+#endif
+        AppLogger.log("transition request layout-expose gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "transition")
+        PreviewManager.shared.dismiss(animated: false)
+        LayoutLibraryController.shared.present(triggerWindow: triggerWindow)
+    }
+    
+    func registerExposeState(template: LayoutTemplate, windows: [AXUIElement], screenFrame: CGRect) {
+        lastExposeState = (template, windows, screenFrame)
+    }
+
+    public func shuffleExposeLayout() {
+        guard let state = lastExposeState, state.windows.count >= 2 else { return }
+        let template = state.template
+        var windows = state.windows
+        let screenFrame = state.screenFrame
+        AppLogger.log("shuffling expose layout windows=\(windows.count)", subsystem: "transition")
+
+        var origFrames: [AXUIElement: CGRect] = [:]
+        for w in windows {
+            if let f = animator.getWindowFrame(w) { origFrames[w] = f }
+        }
+        registerExposeUndo(frames: origFrames)
+
+        let last = windows.removeLast()
+        windows.insert(last, at: 0)
+
+        for (idx, slot) in template.slots.enumerated() where idx < windows.count {
+            let target = template.frame(for: slot, in: screenFrame)
+            animator.animateWindowFrame(windows[idx], to: target)
+        }
+
+        lastExposeState = (template, windows, screenFrame)
+    }
+
+    func registerExposeUndo(frames: [AXUIElement: CGRect]) {
+        var undoMap: [WindowID: CGRect] = [:]
+        for (window, frame) in frames {
+            undoMap[WindowID(element: window)] = frame
+        }
+        lastExposeUndoFrames = undoMap
+    }
+
+    public func performExposeUndo() {
+        guard let frames = lastExposeUndoFrames else { 
+            AppLogger.log("undo requested but no frames stored", subsystem: "transition")
+            return 
+        }
+        AppLogger.log("performing undo for \(frames.count) windows", subsystem: "transition")
+        for (id, frame) in frames {
+            animator.animateWindowFrame(id.element, to: frame)
+        }
+        lastExposeUndoFrames = nil
+    }
+
+    private func executeAutoLayout(triggerWindow: AXUIElement) {
+#if DEBUG
+        // GUARD 2 — session state sanity
+        if sessionScreenFrame == .zero {
+            AppLogger.log(
+                "STRICT: executeAutoLayout called with zero screenFrame gesture=\(currentGestureID.uuidString.prefix(8))",
+                subsystem: "transition"
+            )
+        }
+#endif
+        let screen = sessionScreenFrame != .zero ? sessionScreenFrame : animator.getUsableScreenFrame(for: triggerWindow)
+        AppLogger.log("layout resolution request state=fullscreen auto-layout gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "transition")
         let target = resolver.frame(for: .fullscreen, on: screen)
 
         if var record = store.record(for: triggerWindow) {
@@ -176,9 +360,9 @@ public final class SpatialTransitionEngine {
         animator.animateWindowFrame(triggerWindow, to: target, sessionID: sessionID)
     }
 
-    private func executeThreeColumnLayout(triggerWindow: AXUIElement, sessionID: String) {
-        AppLogger.log("transition request three-column layout", sessionID: sessionID, subsystem: "transition")
-        let screen  = animator.getUsableScreenFrame(for: triggerWindow)
+    private func executeThreeColumnLayout(triggerWindow: AXUIElement) {
+        AppLogger.log("transition request three-column layout gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "transition")
+        let screen = sessionScreenFrame != .zero ? sessionScreenFrame : animator.getUsableScreenFrame(for: triggerWindow)
         var windows = animator.getAllVisibleWindows()
         guard windows.count >= 3 else { executeAutoLayout(triggerWindow: triggerWindow, sessionID: sessionID); return }
 
@@ -198,9 +382,9 @@ public final class SpatialTransitionEngine {
         PreviewManager.shared.dismiss(animated: false, sessionID: sessionID)
     }
 
-    private func executeStageManagerLayout(triggerWindow: AXUIElement, sessionID: String) {
-        AppLogger.log("transition request stage-manager layout", sessionID: sessionID, subsystem: "transition")
-        let screen  = animator.getUsableScreenFrame(for: triggerWindow)
+    private func executeStageManagerLayout(triggerWindow: AXUIElement) {
+        AppLogger.log("transition request stage-manager layout gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "transition")
+        let screen = sessionScreenFrame != .zero ? sessionScreenFrame : animator.getUsableScreenFrame(for: triggerWindow)
         let windows = animator.getAllVisibleWindows()
         guard !windows.isEmpty else { return }
 
@@ -215,8 +399,8 @@ public final class SpatialTransitionEngine {
         PreviewManager.shared.dismiss(animated: false, sessionID: sessionID)
     }
 
-    private func executeExitLayout(triggerWindow: AXUIElement, sessionID: String) {
-        AppLogger.log("transition request exit-layout", sessionID: sessionID, subsystem: "transition")
+    private func executeExitLayout(triggerWindow: AXUIElement) {
+        AppLogger.log("transition request exit-layout gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "transition")
         // Exit native full screen first if applicable
         var fsRef: CFTypeRef?
         if AXUIElementCopyAttributeValue(triggerWindow, "AXFullScreen" as CFString, &fsRef) == .success,
@@ -258,11 +442,7 @@ public final class SpatialTransitionEngine {
     }
 
     private func clearSession() {
-        if let sessionID = activeSessionID {
-            AppLogger.log("transition session cleared", sessionID: sessionID, subsystem: "transition")
-        } else {
-            AppLogger.log("transition session cleared", subsystem: "transition")
-        }
+        AppLogger.log("transition session cleared gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "transition")
         sessionWindow        = nil
         sessionStartFrame    = .zero
         sessionFingerCount   = 2

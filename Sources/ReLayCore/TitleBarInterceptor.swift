@@ -4,11 +4,12 @@ import Accessibility
 
 /// Delegate protocol to pass clean gesture lifecycle events to the Gesture Engine.
 public protocol TitleBarInterceptorDelegate: AnyObject {
-    func gestureDidBegin(on window: AXUIElement, at location: CGPoint, fingerCount: Int, sessionID: String)
-    func gestureDidChange(deltaX: CGFloat, deltaY: CGFloat, velocity: CGFloat, sessionID: String)
-    func gestureDidEnd(sessionID: String)
-    func gestureDidCancel(sessionID: String)
-    func gestureDidDoubleTap(on window: AXUIElement, sessionID: String)
+    func gestureDidBegin(on window: AXUIElement, at location: CGPoint, fingerCount: Int, shiftHeld: Bool, gestureID: UUID)
+    func gestureDidChange(deltaX: CGFloat, deltaY: CGFloat, velocity: CGFloat)
+    func gestureDidEnd()
+    func gestureDidCancel()
+    func gestureDidDoubleTap(on window: AXUIElement)
+    func killSwitchTriggered()
 }
 
 public final class TitleBarInterceptor {
@@ -47,8 +48,11 @@ public final class TitleBarInterceptor {
         }
 
         var variant: String {
+            if hasTabGroup && hasToolbar {
+                return "tabbed-toolbar"   // Safari, Chrome, Xcode — combined tab strip + nav bar
+            }
             if hasTabGroup {
-                return "tabbed"
+                return "tabbed"           // Terminal, plain tab bars
             }
             if hasToolbar && windowChildRoles.contains("AXGroup") {
                 return "blended-toolbar"
@@ -66,13 +70,16 @@ public final class TitleBarInterceptor {
         }
 
         var topBandHeight: CGFloat {
+            if hasTabGroup && hasToolbar {
+                return 80.0 // combined tab strip + navigation toolbar (Safari, Chrome, Xcode)
+            }
             if hasTabGroup {
-                return 112.0
+                return 44.0 // tab strip only (Terminal)
             }
             if hasToolbar {
-                return 96.0
+                return 80.0 // toolbar + title (Finder)
             }
-            return 84.0
+            return 40.0 // standard title bar (TextEdit, Settings)
         }
 
         private static let chromeRoles: Set<String> = [
@@ -116,7 +123,9 @@ public final class TitleBarInterceptor {
     private var isTrackingGesture = false
     private var activeTargetWindow: AXUIElement?
     private var lastKnownTouchCount: Int = 2
-    private var activeSessionID: String?
+    private var isTracking3Finger = false
+    private var accumulated3FingerY: CGFloat = 0
+    private var pendingGestureID: UUID = UUID()
 
     // Configuration
     public init() {}
@@ -124,7 +133,9 @@ public final class TitleBarInterceptor {
     /// Starts intercepting global mouse events
     public func start() throws {
         AppLogger.log("starting event tap setup", subsystem: "interceptor")
-        let eventMask = (1 << CGEventType.scrollWheel.rawValue) | (1 << CGEventType.leftMouseDown.rawValue)
+        let eventMask = (1 << CGEventType.scrollWheel.rawValue) | 
+                         (1 << CGEventType.leftMouseDown.rawValue) |
+                         (1 << CGEventType.keyDown.rawValue)
         
         let observer = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
         
@@ -156,8 +167,10 @@ public final class TitleBarInterceptor {
             matching: NSEvent.EventTypeMask(rawValue: 1 << 29)
         ) { [weak self] event in
             let count = event.touches(matching: .touching, in: nil).count
+            // Always update (including count==0) so stale 3-finger count doesn't bleed
+            // into the next gesture (e.g. after 3-finger expose → 2-finger title-bar swipe).
+            self?.lastKnownTouchCount = count > 0 ? count : 2
             if count > 0 {
-                self?.lastKnownTouchCount = count
                 AppLogger.log("touch count observed count=\(count)", subsystem: "interceptor")
             }
         }
@@ -181,8 +194,28 @@ public final class TitleBarInterceptor {
         resetState()
     }
     
+    
+    private func getFrontmostWindow() -> AXUIElement? {
+        guard let frontmostApp = NSWorkspace.shared.frontmostApplication else { return nil }
+        let axApp = AXUIElementCreateApplication(frontmostApp.processIdentifier)
+        var ref: CFTypeRef?
+        if AXUIElementCopyAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, &ref) == .success {
+            return (ref as! AXUIElement)
+        }
+        // Fallback to the first window in the windows list
+        if AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &ref) == .success,
+           let list = ref as? [AXUIElement], !list.isEmpty {
+            return list[0]
+        }
+        return nil
+    }
+
     /// Main callback handler for intercepted events
     private func handleEvent(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        // CGEvent.location is in screen coordinates (top-left is 0,0). 
+        // We use it directly for AXUIElementCopyElementAtPosition which expects the same.
+        // let location = event.location
+        // AppLogger.log("interceptor event location=\(Int(location.x)),\(Int(location.y))", subsystem: "interceptor")
         // Re-enable event tap if the system disabled it due to timeout or user input.
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let tap = eventTap {
@@ -192,10 +225,56 @@ public final class TitleBarInterceptor {
             return Unmanaged.passUnretained(event)
         }
 
+        // Handle Global Shortcut (Control + Option + Space)
+        if type == .keyDown {
+            if let nsEvent = NSEvent(cgEvent: event) {
+                let modifiers = nsEvent.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                let keyCode  = nsEvent.keyCode
+
+                // Route navigation keys to expose while it is open (swallows them)
+                if LayoutLibraryController.shared.isPresented {
+                    switch keyCode {
+                    case 53, 36, 76, 123, 124, 125, 126:
+                        let code = keyCode
+                        DispatchQueue.main.async {
+                            LayoutLibraryController.shared.handleKeyCode(code)
+                        }
+                        return nil // Swallow
+                    default:
+                        break
+                    }
+                }
+
+                // Global shortcut: Ctrl+Option+Space opens Layout Exposé
+                if modifiers == [.control, .option] && keyCode == 49 {
+                    DispatchQueue.main.async {
+                        LayoutLibraryController.shared.present(triggerWindow: self.getFrontmostWindow())
+                    }
+                    return nil // Swallow
+                }
+
+                // Shuffle layout slots: Ctrl+Option+Tab
+                if modifiers == [.control, .option] && keyCode == 48 {
+                    DispatchQueue.main.async {
+                        SpatialTransitionEngine.shared.shuffleExposeLayout()
+                    }
+                    return nil
+                }
+
+                // Emergency Kill Switch (Cmd + Shift + Escape)
+                if modifiers == [.command, .shift] && keyCode == 53 {
+                    AppLogger.log("emergency kill-switch triggered via keyboard", subsystem: "interceptor")
+                    delegate?.killSwitchTriggered()
+                    return nil // Swallow to prevent system seeing it
+                }
+            }
+            return Unmanaged.passUnretained(event)
+        }
+
         // Handle Double Tap (Left Mouse Down with clickCount == 2)
         if type == .leftMouseDown {
             if let nsEvent = NSEvent(cgEvent: event), nsEvent.clickCount == 2 {
-                let location = event.unflippedLocation
+                let location = event.location
                 if let window = hitTestTitleBar(at: location) {
                     let sessionID = UUID().uuidString.prefix(8).lowercased()
                     delegate?.gestureDidDoubleTap(on: window, sessionID: sessionID)
@@ -215,38 +294,70 @@ public final class TitleBarInterceptor {
         // Phase: Began (Start of a physical gesture)
         if phase == .began {
             AppLogger.log("scroll phase began", subsystem: "interceptor")
-            let location = event.unflippedLocation
+            let location = event.location
+            let fingerCount = lastKnownTouchCount
+            // Fresh UUID for every potential gesture — assigned before hit-test so all
+            // log lines from this interaction share the same prefix whether accepted or missed.
+            pendingGestureID = UUID()
 
             if let window = hitTestTitleBar(at: location) {
                 let sessionID = UUID().uuidString.prefix(8).lowercased()
                 self.activeSessionID = sessionID
                 isTrackingGesture = true
                 activeTargetWindow = window
-                AppLogger.log("title bar hit; beginning gesture tracking fingers=\(lastKnownTouchCount)", sessionID: sessionID, subsystem: "interceptor")
-                delegate?.gestureDidBegin(on: window, at: location, fingerCount: lastKnownTouchCount, sessionID: sessionID)
-
+                let shiftHeld = NSEvent.modifierFlags.contains(.shift)
+                AppLogger.log("title bar hit; beginning gesture tracking fingers=\(lastKnownTouchCount) shift=\(shiftHeld) gesture=\(pendingGestureID.uuidString.prefix(8))", subsystem: "interceptor")
+                delegate?.gestureDidBegin(on: window, at: location, fingerCount: lastKnownTouchCount, shiftHeld: shiftHeld, gestureID: pendingGestureID)
+                
                 // Swallow the event to prevent underlying scroll
                 return nil
             } else {
                 AppLogger.log("scroll began outside title bar hit region", subsystem: "interceptor")
+                // 3-finger gestures trigger expose from anywhere on screen
+                if fingerCount >= 3 {
+                    isTracking3Finger = true
+                    accumulated3FingerY = 0
+                    return nil
+                }
             }
         }
-        
+
+        // Handle 3-finger global tracking (non-title-bar areas)
+        if isTracking3Finger {
+            if phase == .changed {
+                accumulated3FingerY += nsEvent.scrollingDeltaY
+                return nil
+            }
+            if phase == .ended || phase == .cancelled || momentumPhase == .began {
+                let y = accumulated3FingerY
+                isTracking3Finger = false
+                accumulated3FingerY = 0
+                if y < -50 {
+                    AppLogger.log("3-finger swipe down detected; presenting expose", subsystem: "interceptor")
+                    DispatchQueue.main.async {
+                        LayoutLibraryController.shared.present(triggerWindow: self.getFrontmostWindow())
+                    }
+                }
+                return nil
+            }
+            return nil // Swallow any other event while tracking
+        }
+
         // Phase: Changed (Physical finger movement)
         if phase == .changed && isTrackingGesture, let sessionID = activeSessionID {
             // Calculate velocity approximation (pixels per second based on standard 60hz scroll polling)
             let deltaX = nsEvent.scrollingDeltaX
             let deltaY = nsEvent.scrollingDeltaY
-            let velocity = sqrt(deltaX * deltaX + deltaY * deltaY) * 60.0
-
-            AppLogger.log("scroll phase changed while tracking", sessionID: sessionID, subsystem: "interceptor")
-            delegate?.gestureDidChange(deltaX: deltaX, deltaY: deltaY, velocity: velocity, sessionID: sessionID)
+            let velocity = sqrt(deltaX * deltaX + deltaY * deltaY) * 60.0 
+            
+            AppLogger.log("scroll phase changed while tracking gesture=\(pendingGestureID.uuidString.prefix(8))", subsystem: "interceptor")
+            delegate?.gestureDidChange(deltaX: deltaX, deltaY: deltaY, velocity: velocity)
             return nil // Swallow event
         }
-        
+
         // Phase: Ended or Cancelled
-        if (phase == .ended || phase == .cancelled || momentumPhase == .began) && isTrackingGesture, let sessionID = activeSessionID {
-            AppLogger.log("scroll gesture finished phase=\(phase.rawValue) momentum=\(momentumPhase.rawValue)", sessionID: sessionID, subsystem: "interceptor")
+        if (phase == .ended || phase == .cancelled || momentumPhase == .began) && isTrackingGesture {
+            AppLogger.log("scroll gesture finished gesture=\(pendingGestureID.uuidString.prefix(8)) phase=\(phase.rawValue) momentum=\(momentumPhase.rawValue)", subsystem: "interceptor")
             if phase == .cancelled {
                 delegate?.gestureDidCancel(sessionID: sessionID)
             } else {
@@ -286,8 +397,9 @@ public final class TitleBarInterceptor {
             return nil
         }
 
-        let owner = appName(for: window)
-        let signals = chromeSignals(for: hitElement, window: window)
+        let owner    = appName(for: window)
+        let bundleId = bundleID(for: window)
+        let signals  = chromeSignals(for: hitElement, window: window)
 
         let qualification = qualifyHit(
             at: point,
@@ -298,20 +410,21 @@ public final class TitleBarInterceptor {
 
         switch qualification {
         case .accepted(let reason):
+            // pendingGestureID was already set fresh at scroll-began; just log it.
             AppLogger.log(
-                "title bar hit app=\(owner) variant=\(signals.variant) hitRole=\(signals.hitRole) via \(reason)",
+                "title bar hit gesture=\(pendingGestureID.uuidString.prefix(8)) app=\(owner) bundle=\(bundleId) variant=\(signals.variant) topBand=\(Int(signals.topBandHeight)) hitRole=\(signals.hitRole) via \(reason)",
                 subsystem: "interceptor"
             )
             return window
         case .semanticMiss(let reason):
             AppLogger.log(
-                "semantic miss app=\(owner) variant=\(signals.variant) hitRole=\(signals.hitRole) subrole=\(signals.hitSubrole) reason=\(reason)",
+                "semantic miss app=\(owner) bundle=\(bundleId) variant=\(signals.variant) topBand=\(Int(signals.topBandHeight)) hitRole=\(signals.hitRole) subrole=\(signals.hitSubrole) reason=\(reason)",
                 subsystem: "interceptor"
             )
             return nil
         case .geometricMiss(let reason):
             AppLogger.log(
-                "geometric miss app=\(owner) variant=\(signals.variant) hitRole=\(signals.hitRole) subrole=\(signals.hitSubrole) reason=\(reason)",
+                "geometric miss app=\(owner) bundle=\(bundleId) variant=\(signals.variant) topBand=\(Int(signals.topBandHeight)) hitRole=\(signals.hitRole) subrole=\(signals.hitSubrole) reason=\(reason)",
                 subsystem: "interceptor"
             )
             return nil
@@ -453,6 +566,15 @@ public final class TitleBarInterceptor {
         return app.localizedName ?? app.bundleIdentifier ?? "pid-\(pid)"
     }
 
+    private func bundleID(for element: AXUIElement) -> String {
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(element, &pid) == .success,
+              let app = NSRunningApplication(processIdentifier: pid) else {
+            return "unknown"
+        }
+        return app.bundleIdentifier ?? "pid-\(pid)"
+    }
+
     private func qualifyHit(
         at point: CGPoint,
         window: AXUIElement,
@@ -467,25 +589,33 @@ public final class TitleBarInterceptor {
             return .semanticMiss("window-frame-unavailable")
         }
 
-        let titleBarMinY = frame.origin.y + frame.size.height - signals.topBandHeight
-        let titleBarMaxY = frame.origin.y + frame.size.height
-        let isWithinTopBand = point.y >= titleBarMinY && point.y <= titleBarMaxY
+        let titleBarMinY = frame.origin.y
+        let titleBarMaxY = frame.origin.y + signals.topBandHeight
+        
+        // Use a consistent coordinate system (screen coordinates).
+        // AXUIElementCopyElementAtPosition and kAXPositionAttribute both use top-left as origin.
+        let hitBuffer: CGFloat = 8.0
+        let isWithinTopBand = point.y >= (titleBarMinY - hitBuffer) && point.y <= (titleBarMaxY + hitBuffer)
 
         guard isWithinTopBand else {
+            AppLogger.log("geometric miss: pointY=\(Int(point.y)) band=\(Int(titleBarMinY))..\(Int(titleBarMaxY)) windowY=\(Int(frame.origin.y))", subsystem: "interceptor")
             return .geometricMiss(
                 "pointY=\(Int(point.y)) titleBarMinY=\(Int(titleBarMinY)) titleBarMaxY=\(Int(titleBarMaxY)) windowY=\(Int(frame.origin.y)) windowHeight=\(Int(frame.size.height))"
             )
         }
 
+        let ancestry = signals.ancestryRoles.joined(separator: ">")
+
+        // Reject only if the hit element is clearly inside scrollable/editable content.
+        // Everything else within the top band is treated as the title bar area —
+        // this covers Electron apps, custom-chrome apps, and any app that doesn't
+        // expose a formal AXTitleBar element.
         if signals.hasContentOwnership {
-            return .semanticMiss("content-ownership ancestry=\(signals.ancestryRoles.joined(separator: \">\"))".replacingOccurrences(of: "\\>", with: ">"))
+            AppLogger.log("semantic miss: content-ownership at point (role: \(signals.hitRole)) ancestry=\(ancestry)", subsystem: "interceptor")
+            return .semanticMiss("content-ownership ancestry=\(ancestry)")
         }
 
-        if signals.allowsNormalizedTopBandOwnership {
-            return .accepted("normalized-\(signals.variant)")
-        }
-
-        return .semanticMiss("ambiguous-ownership ancestry=\(signals.ancestryRoles.joined(separator: \">\"))".replacingOccurrences(of: "\\>", with: ">"))
+        return .accepted("geometric-topband variant=\(signals.variant)")
     }
 
     private func chromeSignals(for element: AXUIElement, window: AXUIElement) -> ChromeSignals {
@@ -562,7 +692,8 @@ public final class TitleBarInterceptor {
     private func resetState() {
         isTrackingGesture = false
         activeTargetWindow = nil
-        activeSessionID = nil
+        isTracking3Finger = false
+        accumulated3FingerY = 0
     }
     
     enum InterceptorError: Error {

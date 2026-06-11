@@ -1,6 +1,6 @@
 # PROJECT_STATE.md
 
-**As of:** 2026-05-15
+**As of:** 2026-05-20
 
 ---
 
@@ -55,10 +55,10 @@
 
 ## Current Verification Status
 
-- `swift build`: failing
-- `swift test`: failing
-- only test present today is a bootstrap placeholder
-- no current evidence of a passing automated semantic-core verification layer
+- `swift build`: passing
+- `swift test`: passing — 72 tests, 0 failures
+- semantic-core test suites: TransitionGraphTests (34), LayoutResolverTests (21), WindowRecordTests (7)
+- gesture ingress: `tabbed-toolbar` variant fix applied; live app-matrix verification pending
 - no current evidence of a repeatable human-test workflow
 
 ---

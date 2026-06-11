@@ -53,27 +53,38 @@ class LayoutTransitionGraph {
 
     private var table: [TransitionKey: WindowLayoutState] = [:]
 
-    init() { buildTable() }
+    init(centerSnap: Bool = false) { buildTable(centerSnap: centerSnap) }
 
     func nextState(from state: WindowLayoutState, moving direction: GestureDirection) -> WindowLayoutState? {
         return table[TransitionKey(state: state, direction: direction)]
     }
 
-    private func buildTable() {
+    private func buildTable(centerSnap: Bool = false) {
         func add(_ from: WindowLayoutState, _ dir: GestureDirection, _ to: WindowLayoutState) {
             table[TransitionKey(state: from, direction: dir)] = to
         }
 
         // MARK: Horizontal — navigate columns
-        for state in [WindowLayoutState.floating, .center, .fullscreen] {
-            add(state, .left,  .leftHalf)
-            add(state, .right, .rightHalf)
+        if centerSnap {
+            // Landing on center first; from center, continue to halves
+            add(.floating,   .left,  .center)
+            add(.floating,   .right, .center)
+            add(.fullscreen, .left,  .leftHalf)
+            add(.fullscreen, .right, .rightHalf)
+        } else {
+            for state in [WindowLayoutState.floating, .fullscreen] {
+                add(state, .left,  .leftHalf)
+                add(state, .right, .rightHalf)
+            }
         }
-        // Half → third (push further) or center (pull back)
+        // Center navigates out to halves in either mode
+        add(.center, .left,  .leftHalf)
+        add(.center, .right, .rightHalf)
+        // Half → third (push further) or cross-side jump (pull back)
         add(.leftHalf,  .left,  .leftThird)
-        add(.leftHalf,  .right, .center)
+        add(.leftHalf,  .right, .rightHalf)
         add(.rightHalf, .right, .rightThird)
-        add(.rightHalf, .left,  .center)
+        add(.rightHalf, .left,  .leftHalf)
         // Third → half (pull back; edge resist in other direction)
         add(.leftThird,  .right, .leftHalf)
         add(.rightThird, .left,  .rightHalf)
@@ -83,30 +94,7 @@ class LayoutTransitionGraph {
         add(.rightTopSixth,   .left,  .leftTopSixth)
         add(.rightBottomSixth,.left,  .leftBottomSixth)
 
-        // MARK: Vertical — resize and subdivide
-        // Grow halves/center/floating up to fullscreen
-        for state in [WindowLayoutState.floating, .center, .leftHalf, .rightHalf] {
-            add(state, .up, .fullscreen)
-        }
-        // Shrink fullscreen down to center; halves down to thirds
-        add(.fullscreen, .down, .center)
-        add(.leftHalf,   .down, .leftThird)
-        add(.rightHalf,  .down, .rightThird)
-
-        // Subdivide thirds into sixths (first split picks the natural half)
-        add(.leftThird,  .up,   .leftBottomSixth)   // upward scroll → bottom half shown
-        add(.leftThird,  .down, .leftTopSixth)      // downward scroll → top half shown
-        add(.rightThird, .up,   .rightBottomSixth)
-        add(.rightThird, .down, .rightTopSixth)
-
-        // Toggle between sixths — both directions cycle top↔bottom
-        add(.leftTopSixth,    .up,   .leftBottomSixth)
-        add(.leftTopSixth,    .down, .leftBottomSixth)
-        add(.leftBottomSixth, .up,   .leftTopSixth)
-        add(.leftBottomSixth, .down, .leftTopSixth)
-        add(.rightTopSixth,    .up,   .rightBottomSixth)
-        add(.rightTopSixth,    .down, .rightBottomSixth)
-        add(.rightBottomSixth, .up,   .rightTopSixth)
-        add(.rightBottomSixth, .down, .rightTopSixth)
+        // Vertical gestures (up/down) are handled as direct actions in
+        // SpatialTransitionEngine, not as graph transitions.
     }
 }
