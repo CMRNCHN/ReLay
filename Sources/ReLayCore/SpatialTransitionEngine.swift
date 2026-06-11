@@ -10,7 +10,7 @@ import Accessibility
 public final class SpatialTransitionEngine {
     public static let shared = SpatialTransitionEngine()
 
-    private var graph    = LayoutTransitionGraph(centerSnap: ReLaySettings.centerSnapEnabled)
+    private let graph    = LayoutTransitionGraph()
     private let store    = WindowStateStore.shared
     private let resolver = LayoutResolver.shared
     private let animator = LayoutOrchestrator.shared
@@ -38,13 +38,6 @@ public final class SpatialTransitionEngine {
     
     private init() {
         AppLogger.log("spatial transition engine initialized", subsystem: "transition")
-        NotificationCenter.default.addObserver(
-            forName: NSNotification.Name("ReLaySettingsChanged"),
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            self?.graph = LayoutTransitionGraph(centerSnap: ReLaySettings.centerSnapEnabled)
-        }
     }
 
     // MARK: - Gesture Session Lifecycle
@@ -132,9 +125,9 @@ public final class SpatialTransitionEngine {
             guard let dir = direction else { cancelSession(); return }
             switch dir {
             case .up:
-                executeUpSwipeAction(window: window)
+                executeEnlarge(window: window)
             case .down:
-                executeDownSwipeAction(window: window)
+                executeMinimize(window: window)
             case .left, .right:
                 executeStateTransition(direction: dir, for: window)
             }
@@ -247,22 +240,6 @@ public final class SpatialTransitionEngine {
         if ReLaySettings.hapticsEnabled { NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now) }
         PreviewManager.shared.commitOverlay(finalFrame: target)
         animator.animateWindowFrame(window, to: target)
-    }
-
-    private func executeUpSwipeAction(window: AXUIElement) {
-        switch ReLaySettings.upSwipeAction {
-        case .center:   executeTransitionTo(.center, window: window)
-        case .nothing:  cancelSession()
-        default:        executeEnlarge(window: window)
-        }
-    }
-
-    private func executeDownSwipeAction(window: AXUIElement) {
-        switch ReLaySettings.downSwipeAction {
-        case .center:   executeTransitionTo(.center, window: window)
-        case .nothing:  cancelSession()
-        default:        executeMinimize(window: window)
-        }
     }
 
     // MARK: - Multi-window Operations

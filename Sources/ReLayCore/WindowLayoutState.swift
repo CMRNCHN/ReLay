@@ -53,29 +53,21 @@ class LayoutTransitionGraph {
 
     private var table: [TransitionKey: WindowLayoutState] = [:]
 
-    init(centerSnap: Bool = false) { buildTable(centerSnap: centerSnap) }
+    init() { buildTable() }
 
     func nextState(from state: WindowLayoutState, moving direction: GestureDirection) -> WindowLayoutState? {
         return table[TransitionKey(state: state, direction: direction)]
     }
 
-    private func buildTable(centerSnap: Bool = false) {
+    private func buildTable() {
         func add(_ from: WindowLayoutState, _ dir: GestureDirection, _ to: WindowLayoutState) {
             table[TransitionKey(state: from, direction: dir)] = to
         }
 
         // MARK: Horizontal — navigate columns
-        if centerSnap {
-            // Landing on center first; from center, continue to halves
-            add(.floating,   .left,  .center)
-            add(.floating,   .right, .center)
-            add(.fullscreen, .left,  .leftHalf)
-            add(.fullscreen, .right, .rightHalf)
-        } else {
-            for state in [WindowLayoutState.floating, .fullscreen] {
-                add(state, .left,  .leftHalf)
-                add(state, .right, .rightHalf)
-            }
+        for state in [WindowLayoutState.floating, .fullscreen] {
+            add(state, .left,  .leftHalf)
+            add(state, .right, .rightHalf)
         }
         // Center navigates out to halves in either mode
         add(.center, .left,  .leftHalf)

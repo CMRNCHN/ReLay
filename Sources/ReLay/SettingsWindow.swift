@@ -75,9 +75,6 @@ final class SettingsWindowController: NSWindowController {
     private var sliders: [NSSlider] = []
     private var presetControl: NSSegmentedControl?
     private var hapticsSwitch: NSSwitch?
-    private var centerSnapSwitch: NSSwitch?
-    private var upSwipePopup: NSPopUpButton?
-    private var downSwipePopup: NSPopUpButton?
     private var interceptionSwitch: NSSwitch?
 
     // MARK: - Init
@@ -164,19 +161,6 @@ final class SettingsWindowController: NSWindowController {
             title: "Animation & Feedback",
             caption: "Control how windows move and how they feel.",
             rows: [animSlider, hapticsRow]
-        ))
-
-        // ── Swipe Behaviour ─────────────────────────────────────────────────
-        let centerRow = buildToggleRow(
-            title: "Center Snap",
-            description: "Swipe left/right from a floating window to land in the center before the halves.",
-            key: "centerSnapEnabled", defaultOn: false,
-            switchRef: { [weak self] sw in self?.centerSnapSwitch = sw }
-        )
-        outer.addArrangedSubview(settingsSection(
-            title: "Swipe Behaviour",
-            caption: "What each swipe direction does.",
-            rows: [centerRow, buildSwipeActionsContent()]
         ))
 
         // ── Advanced ────────────────────────────────────────────────────────
@@ -355,45 +339,6 @@ final class SettingsWindowController: NSWindowController {
         return row
     }
 
-    private func buildSwipeActionsContent() -> NSView {
-        let upLabel = NSTextField(labelWithString: "↑  Up swipe")
-        upLabel.font = .systemFont(ofSize: 12)
-        upLabel.setContentHuggingPriority(.required, for: .horizontal)
-
-        let upPopup = NSPopUpButton()
-        upPopup.addItems(withTitles: ["Fullscreen", "Center", "Nothing"])
-        let upStored = UserDefaults.standard.string(forKey: "upSwipeAction") ?? "fullscreen"
-        switch upStored {
-        case "center":  upPopup.selectItem(withTitle: "Center")
-        case "nothing": upPopup.selectItem(withTitle: "Nothing")
-        default:        upPopup.selectItem(withTitle: "Fullscreen")
-        }
-        upPopup.target = self; upPopup.action = #selector(upSwipeChanged(_:))
-        upSwipePopup = upPopup
-
-        let downLabel = NSTextField(labelWithString: "↓  Down swipe")
-        downLabel.font = .systemFont(ofSize: 12)
-        downLabel.setContentHuggingPriority(.required, for: .horizontal)
-
-        let downPopup = NSPopUpButton()
-        downPopup.addItems(withTitles: ["Minimize", "Center", "Nothing"])
-        let downStored = UserDefaults.standard.string(forKey: "downSwipeAction") ?? "minimize"
-        switch downStored {
-        case "center":  downPopup.selectItem(withTitle: "Center")
-        case "nothing": downPopup.selectItem(withTitle: "Nothing")
-        default:        downPopup.selectItem(withTitle: "Minimize")
-        }
-        downPopup.target = self; downPopup.action = #selector(downSwipeChanged(_:))
-        downSwipePopup = downPopup
-
-        let upRow   = NSStackView(views: [upLabel,   upPopup]);   upRow.spacing   = 8; upRow.alignment   = .centerY
-        let downRow = NSStackView(views: [downLabel, downPopup]); downRow.spacing = 8; downRow.alignment = .centerY
-
-        let stack = NSStackView(views: [upRow, downRow])
-        stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 10
-        return stack
-    }
-
     // MARK: - Actions
 
     @objc private func presetSelected(_ seg: NSSegmentedControl) {
@@ -427,18 +372,6 @@ final class SettingsWindowController: NSWindowController {
         }
     }
 
-    @objc private func upSwipeChanged(_ popup: NSPopUpButton) {
-        let map = ["Fullscreen": "fullscreen", "Center": "center", "Nothing": "nothing"]
-        UserDefaults.standard.set(map[popup.titleOfSelectedItem ?? ""] ?? "fullscreen", forKey: "upSwipeAction")
-        postSettingsChanged()
-    }
-
-    @objc private func downSwipeChanged(_ popup: NSPopUpButton) {
-        let map = ["Minimize": "minimize", "Center": "center", "Nothing": "nothing"]
-        UserDefaults.standard.set(map[popup.titleOfSelectedItem ?? ""] ?? "minimize", forKey: "downSwipeAction")
-        postSettingsChanged()
-    }
-
     @objc private func resetAll() {
         for (i, setting) in sliderSettings.enumerated() {
             sliders[i].doubleValue = setting.defaultValue
@@ -446,12 +379,6 @@ final class SettingsWindowController: NSWindowController {
         }
         hapticsSwitch?.state = .on
         UserDefaults.standard.set(true, forKey: "snapHapticsEnabled")
-        centerSnapSwitch?.state = .off
-        UserDefaults.standard.set(false, forKey: "centerSnapEnabled")
-        upSwipePopup?.selectItem(withTitle: "Fullscreen")
-        UserDefaults.standard.set("fullscreen", forKey: "upSwipeAction")
-        downSwipePopup?.selectItem(withTitle: "Minimize")
-        UserDefaults.standard.set("minimize", forKey: "downSwipeAction")
         presetControl?.selectedSegment = 1
         postSettingsChanged()
     }
