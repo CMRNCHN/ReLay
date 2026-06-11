@@ -96,9 +96,9 @@ class PreviewManager {
         }
     }
     
-    func commitOverlay(finalFrame: CGRect) {
+    func commitOverlay(finalFrame: CGRect, sessionID: String) {
         guard let window = previewWindow, window.isVisible else { return }
-        
+
         let targetFlipped = flipToBottomUp(finalFrame)
         
         // Hide target window immediately

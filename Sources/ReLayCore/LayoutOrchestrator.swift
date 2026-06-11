@@ -19,12 +19,12 @@ class LayoutOrchestrator {
 
     /// Tiles `windows` inside `screen`. `columns` fixes the column count;
     /// nil computes a square-ish grid automatically.
-    func tileWindows(_ windows: [AXUIElement], in screen: CGRect, columns: Int? = nil, gap: CGFloat = 2) {
+    func tileWindows(_ windows: [AXUIElement], in screen: CGRect, columns: Int? = nil, gap: CGFloat = 2, sessionID: String) {
         let count = windows.count
         guard count > 0 else { return }
 
         if count == 1 {
-            animateWindowFrame(windows[0], to: screen)
+            animateWindowFrame(windows[0], to: screen, sessionID: sessionID)
             return
         }
 
@@ -43,7 +43,7 @@ class LayoutOrchestrator {
                 width:  max(1, cellW - gap),
                 height: max(1, cellH - gap)
             )
-            animateWindowFrame(window, to: frame)
+            animateWindowFrame(window, to: frame, sessionID: sessionID)
         }
     }
 

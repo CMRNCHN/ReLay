@@ -13,4 +13,10 @@ public enum AppLogger {
         let line = "[\(timestamp)] [\(subsystem)] \(message)\n"
         FileHandle.standardOutput.write(Data(line.utf8))
     }
+
+    public static func log(_ message: String, sessionID: String, subsystem: String) {
+        let timestamp = formatter.string(from: Date())
+        let line = "[\(timestamp)] [\(subsystem)] [sid=\(sessionID)] \(message)\n"
+        FileHandle.standardOutput.write(Data(line.utf8))
+    }
 }
