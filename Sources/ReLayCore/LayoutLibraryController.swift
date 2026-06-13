@@ -26,17 +26,7 @@ public final class LayoutLibraryController: NSWindowController {
     private var dockView: LibraryAppDockView?
 
     private init() {
-        let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 960, height: 640),
-            styleMask: [.borderless, .nonactivatingPanel],
-            backing: .buffered,
-            defer: false
-        )
-        panel.level = .floating
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = true
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        let panel = makeLibraryPanel()
         super.init(window: panel)
     }
 
@@ -245,9 +235,7 @@ public final class LayoutLibraryController: NSWindowController {
         panel.setFrameOrigin(CGPoint(x: targetOrigin.x, y: targetOrigin.y - 20))
         panel.alphaValue = 0
         panel.orderFront(nil)
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.26
-            ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.25, 0.46, 0.45, 0.94)
+        makeAnimationContext(duration: AnimationTiming.transition, timingFunc: makeEaseInOutTiming()) {
             panel.animator().alphaValue = 1
             panel.animator().setFrameOrigin(targetOrigin)
         }
@@ -257,8 +245,8 @@ public final class LayoutLibraryController: NSWindowController {
         guard let panel = window else { completion(); return }
         let origin = panel.frame.origin
         NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.16
-            ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            ctx.duration = AnimationTiming.drag
+            ctx.timingFunction = makeEaseInTiming()
             panel.animator().alphaValue = 0
             panel.animator().setFrameOrigin(CGPoint(x: origin.x, y: origin.y - 14))
         }, completionHandler: completion)
@@ -555,8 +543,7 @@ final class LayoutTemplateCard: NSView {
     func setSelected(_ selected: Bool) {
         guard isSelected != selected else { return }
         isSelected = selected
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.15
+        makeAnimationContext(duration: 0.15) {
             self.animator().layer?.backgroundColor = self.cardBG().cgColor
         }
         needsDisplay = true
@@ -624,8 +611,7 @@ final class LayoutTemplateCard: NSView {
     override func mouseEntered(with event: NSEvent) {
         guard !isSelected else { return }
         isHovered = true
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.1
+        makeAnimationContext(duration: AnimationTiming.hover) {
             self.animator().layer?.backgroundColor = self.cardBG().cgColor
         }
     }
@@ -633,8 +619,7 @@ final class LayoutTemplateCard: NSView {
     override func mouseExited(with event: NSEvent) {
         isHovered = false
         guard !isSelected else { return }
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.1
+        makeAnimationContext(duration: AnimationTiming.hover) {
             self.animator().layer?.backgroundColor = self.cardBG().cgColor
         }
     }
@@ -735,15 +720,7 @@ final class LibraryCanvasView: NSView {
     }
 
     private func makeApplyButton() -> NSButton {
-        let btn = NSButton(title: "Apply Layout", target: self, action: #selector(applyTapped))
-        btn.bezelStyle = .roundRect
-        btn.wantsLayer = true
-        btn.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
-        btn.layer?.cornerRadius = 8
-        btn.contentTintColor = .white
-        btn.font = .systemFont(ofSize: 13, weight: .medium)
-        btn.translatesAutoresizingMaskIntoConstraints = false
-        return btn
+        makeAccentButton(title: "Apply Layout", target: self, action: #selector(applyTapped))
     }
 
     private func buildSlots() {
@@ -870,22 +847,20 @@ final class LibrarySlotView: NSView {
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
         guard sender.draggingPasteboard.string(forType: kLayoutAppPasteboardType) != nil else { return [] }
         isDropTarget = true
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.1
+        makeAnimationContext(duration: AnimationTiming.hover) {
             self.animator().layer?.borderColor     = NSColor.controlAccentColor.cgColor
             self.animator().layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.14).cgColor
         }
         let pulse = CABasicAnimation(keyPath: "transform.scale")
         pulse.fromValue = 1.0; pulse.toValue = 1.04
-        pulse.duration  = 0.1; pulse.autoreverses = true
+        pulse.duration  = AnimationTiming.hover; pulse.autoreverses = true
         layer?.add(pulse, forKey: "pulse")
         return .copy
     }
 
     override func draggingExited(_ sender: NSDraggingInfo?) {
         isDropTarget = false
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.12
+        makeAnimationContext(duration: AnimationTiming.drag) {
             self.animator().layer?.borderColor     = NSColor.separatorColor.withAlphaComponent(0.6).cgColor
             self.animator().layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.5).cgColor
         }
@@ -894,8 +869,7 @@ final class LibrarySlotView: NSView {
     override func draggingEnded(_ sender: NSDraggingInfo) {
         // Reset visual state regardless of whether the drop landed here or elsewhere
         isDropTarget = false
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.12
+        makeAnimationContext(duration: AnimationTiming.drag) {
             self.animator().layer?.borderColor     = NSColor.separatorColor.withAlphaComponent(0.6).cgColor
             self.animator().layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.5).cgColor
         }
@@ -1014,8 +988,7 @@ final class LibraryAppItemView: NSView, NSDraggingSource {
     override func mouseDown(with event: NSEvent) {
         mouseDownPoint = event.locationInWindow
         dragging = false
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.08
+        makeAnimationContext(duration: 0.08) {
             self.animator().layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.15).cgColor
         }
     }
@@ -1047,24 +1020,21 @@ final class LibraryAppItemView: NSView, NSDraggingSource {
 
     override func mouseUp(with event: NSEvent) {
         dragging = false
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.12
+        makeAnimationContext(duration: AnimationTiming.drag) {
             self.animator().layer?.backgroundColor = NSColor.clear.cgColor
         }
     }
 
     override func mouseEntered(with event: NSEvent) {
         guard !dragging else { return }
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.1
+        makeAnimationContext(duration: AnimationTiming.hover) {
             self.animator().layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.06).cgColor
         }
     }
 
     override func mouseExited(with event: NSEvent) {
         guard !dragging else { return }
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.1
+        makeAnimationContext(duration: AnimationTiming.hover) {
             self.animator().layer?.backgroundColor = NSColor.clear.cgColor
         }
     }
