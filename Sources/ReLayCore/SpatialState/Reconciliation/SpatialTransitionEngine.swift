@@ -399,7 +399,7 @@ public final class SpatialTransitionEngine {
         PreviewManager.shared.dismiss(animated: false, sessionID: sessionID)
     }
 
-    private func executeExitLayout(triggerWindow: AXUIElement) {
+    private func executeExitLayout(triggerWindow: AXUIElement, sessionID: String = "") {
         AppLogger.log("transition request exit-layout gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "transition")
         // Exit native full screen first if applicable
         var fsRef: CFTypeRef?
