@@ -192,14 +192,7 @@ class LayoutOrchestrator {
     /// Writes `frame` to `window`. Returns false if the AX element is no longer
     /// valid (e.g. window closed mid-gesture) so callers can mark it stale.
     @discardableResult
-    func setWindowFrame(_ window: AXUIElement, frame: CGRect, source: String = "unknown") -> Bool {
-#if DEBUG
-        // GUARD 3 — execution path enforcement
-        // Every frame write should originate from "gesture" or "expose".
-        if source != "gesture" && source != "expose" {
-            AppLogger.log("STRICT: setWindowFrame called with untagged source=\(source)", subsystem: "orchestrator")
-        }
-#endif
+    func setWindowFrame(_ window: AXUIElement, frame: CGRect, source: FrameSource) -> Bool {
         var pos = frame.origin, size = frame.size
         guard let posVal  = AXValueCreate(.cgPoint, &pos),
               let sizeVal = AXValueCreate(.cgSize,  &size) else {
