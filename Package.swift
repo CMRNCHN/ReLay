@@ -29,8 +29,7 @@ let package = Package(
 
         .target(
             name: "ReLayCore",
-            path: "Sources/ReLayCore",
-            plugins: []
+            path: "Sources/ReLayCore"
         ),
 
         .target(
