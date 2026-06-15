@@ -6,8 +6,8 @@ import Accessibility
 public protocol TitleBarInterceptorDelegate: AnyObject {
     func gestureDidBegin(on window: AXUIElement, at location: CGPoint, fingerCount: Int, shiftHeld: Bool, gestureID: UUID)
     func gestureDidChange(deltaX: CGFloat, deltaY: CGFloat, velocity: CGFloat)
-    func gestureDidEnd()
-    func gestureDidCancel()
+    func gestureDidEnd(sessionID: String)
+    func gestureDidCancel(sessionID: String)
     func gestureDidDoubleTap(on window: AXUIElement)
     func killSwitchTriggered()
 }
