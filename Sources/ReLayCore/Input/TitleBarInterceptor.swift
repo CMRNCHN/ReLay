@@ -4,10 +4,10 @@ import Accessibility
 
 /// Delegate protocol to pass clean gesture lifecycle events to the Gesture Engine.
 public protocol TitleBarInterceptorDelegate: AnyObject {
-    func gestureDidBegin(on window: AXUIElement, at location: CGPoint, fingerCount: Int, shiftHeld: Bool, gestureID: UUID)
-    func gestureDidChange(deltaX: CGFloat, deltaY: CGFloat, velocity: CGFloat)
-    func gestureDidEnd()
-    func gestureDidCancel()
+    func gestureDidBegin(on window: AXUIElement, at location: CGPoint, fingerCount: Int, shiftHeld: Bool, gestureID: UUID, sessionID: String)
+    func gestureDidChange(deltaX: CGFloat, deltaY: CGFloat, velocity: CGFloat, sessionID: String)
+    func gestureDidEnd(sessionID: String)
+    func gestureDidCancel(sessionID: String)
     func gestureDidDoubleTap(on window: AXUIElement)
     func killSwitchTriggered()
 }
@@ -307,7 +307,7 @@ public final class TitleBarInterceptor {
                 activeTargetWindow = window
                 let shiftHeld = NSEvent.modifierFlags.contains(.shift)
                 AppLogger.log("title bar hit; beginning gesture tracking fingers=\(lastKnownTouchCount) shift=\(shiftHeld) gesture=\(pendingGestureID.uuidString.prefix(8))", subsystem: "interceptor")
-                delegate?.gestureDidBegin(on: window, at: location, fingerCount: lastKnownTouchCount, shiftHeld: shiftHeld, gestureID: pendingGestureID)
+                delegate?.gestureDidBegin(on: window, at: location, fingerCount: lastKnownTouchCount, shiftHeld: shiftHeld, gestureID: pendingGestureID, sessionID: sessionID)
                 
                 // Swallow the event to prevent underlying scroll
                 return nil
@@ -351,7 +351,7 @@ public final class TitleBarInterceptor {
             let velocity = sqrt(deltaX * deltaX + deltaY * deltaY) * 60.0 
             
             AppLogger.log("scroll phase changed while tracking gesture=\(pendingGestureID.uuidString.prefix(8))", subsystem: "interceptor")
-            delegate?.gestureDidChange(deltaX: deltaX, deltaY: deltaY, velocity: velocity)
+            delegate?.gestureDidChange(deltaX: deltaX, deltaY: deltaY, velocity: velocity, sessionID: sessionID)
             return nil // Swallow event
         }
 

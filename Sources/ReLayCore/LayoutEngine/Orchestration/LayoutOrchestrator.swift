@@ -5,6 +5,14 @@ import Accessibility
 // ONLY VALID FRAME WRITER — all AX frame writes in the system must go through this file.
 // Do not call AXUIElementSetAttributeValue for position/size from any other layer.
 
+/// Frame mutation origin - required for all layout changes to be attributable.
+enum FrameSource {
+    case gesture
+    case spatialEngine
+    case system
+    case programmatic
+}
+
 /// Low-level animation and AX primitive layer.
 /// No layout semantics, no state machine — pure window manipulation.
 class LayoutOrchestrator {
@@ -184,22 +192,20 @@ class LayoutOrchestrator {
     /// Writes `frame` to `window`. Returns false if the AX element is no longer
     /// valid (e.g. window closed mid-gesture) so callers can mark it stale.
     @discardableResult
-    func setWindowFrame(_ window: AXUIElement, frame: CGRect, source: String = "unknown") -> Bool {
-#if DEBUG
-        // GUARD 3 — execution path enforcement
-        // Every frame write should originate from "gesture" or "expose".
-        if source != "gesture" && source != "expose" {
-            AppLogger.log("STRICT: setWindowFrame called with untagged source=\(source)", subsystem: "orchestrator")
-        }
-#endif
+    func setWindowFrame(_ window: AXUIElement, frame: CGRect, source: FrameSource) -> Bool {
         var pos = frame.origin, size = frame.size
         guard let posVal  = AXValueCreate(.cgPoint, &pos),
-              let sizeVal = AXValueCreate(.cgSize,  &size) else { return false }
+              let sizeVal = AXValueCreate(.cgSize,  &size) else {
+            AppLogger.log("window set frame FAILED to create AXValue", subsystem: "window")
+            return false
+        }
         // size → position → size avoids macOS off-screen clamping
         let r1 = AXUIElementSetAttributeValue(window, kAXSizeAttribute     as CFString, sizeVal)
         let r2 = AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, posVal)
         let r3 = AXUIElementSetAttributeValue(window, kAXSizeAttribute     as CFString, sizeVal)
-        return r1 == .success && r2 == .success && r3 == .success
+        let success = r1 == .success && r2 == .success && r3 == .success
+        AppLogger.log("window set frame result=\(success ? "ok" : "failed") r1=\(r1.rawValue) r2=\(r2.rawValue) r3=\(r3.rawValue) frame=\(frame.debugDescription)", subsystem: "window")
+        return success
     }
 
     // MARK: - Spring Animation
@@ -209,21 +215,20 @@ class LayoutOrchestrator {
         return v > 0 ? v : 0.220
     }
 
-    func animateWindowFrame(_ window: AXUIElement, to target: CGRect, duration: TimeInterval? = nil, source: String = "unknown") {
-#if DEBUG
-        // GUARD 3 — execution path enforcement
-        if source != "gesture" && source != "expose" {
-            AppLogger.log("STRICT: animateWindowFrame called with untagged source=\(source)", subsystem: "orchestrator")
-        }
-#endif
+    func animateWindowFrame(_ window: AXUIElement, to target: CGRect, duration: TimeInterval? = nil, sessionID: String? = nil, source: FrameSource) {
         let duration = duration ?? snapDuration
         let id = WindowID(element: window)
         activeAnimations[id]?.invalidate()
 
+        AppLogger.log("animation start target=\(target.debugDescription) duration=\(duration)", subsystem: "orchestrator")
+
         guard let start = getWindowFrame(window) else {
-            setWindowFrame(window, frame: target)
+            AppLogger.log("animation immediate frame set (no current frame)", subsystem: "orchestrator")
+            setWindowFrame(window, frame: target, source: source)
             return
         }
+
+        AppLogger.log("animation easing from \(start.debugDescription) to \(target.debugDescription)", subsystem: "orchestrator")
 
         let t0 = Date()
         let timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] timer in
@@ -231,6 +236,7 @@ class LayoutOrchestrator {
             var t = CGFloat(Date().timeIntervalSince(t0) / duration)
             if t >= 1.0 {
                 t = 1.0; timer.invalidate(); self.activeAnimations.removeValue(forKey: id)
+                AppLogger.log("animation complete", subsystem: "orchestrator")
             }
             let p = self.spring(t)
             self.setWindowFrame(window, frame: CGRect(
@@ -238,7 +244,7 @@ class LayoutOrchestrator {
                 y:      start.origin.y + (target.origin.y - start.origin.y) * p,
                 width:  start.width    + (target.width     - start.width)    * p,
                 height: start.height   + (target.height    - start.height)   * p
-            ))
+            ), source: source)
         }
         RunLoop.main.add(timer, forMode: .common)
         activeAnimations[id] = timer

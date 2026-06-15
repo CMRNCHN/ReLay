@@ -1,1 +1,30 @@
-{}
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd /home/user/ReLay && git fetch origin && git pull origin $(git rev-parse --abbrev-ref HEAD) 2>/dev/null || true",
+            "statusMessage": "Syncing remote changes...",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path // .tool_response.filePath' | { read -r f; if [ -n \"$f\" ] && [ -d /home/user/ReLay/.git ]; then cd /home/user/ReLay && git add \"$f\" 2>/dev/null && git commit -m \"auto: $(date '+%Y-%m-%d %H:%M:%S')\" --allow-empty 2>/dev/null && git push -u origin $(git rev-parse --abbrev-ref HEAD) 2>/dev/null || true; fi; } 2>/dev/null || true",
+            "statusMessage": "Pushing changes...",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

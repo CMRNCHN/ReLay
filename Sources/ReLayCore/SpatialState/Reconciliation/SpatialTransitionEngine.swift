@@ -49,10 +49,10 @@ public final class SpatialTransitionEngine {
 
     // MARK: - Gesture Session Lifecycle
 
-    func beginSession(window: AXUIElement, fingerCount: Int, at location: CGPoint, gestureID: UUID = UUID()) {
+    func beginSession(window: AXUIElement, fingerCount: Int, at location: CGPoint, gestureID: UUID = UUID(), sessionID: String = "") {
         // GESTURE ENTRY
         currentGestureID = gestureID
-        AppLogger.log("session begin gesture=\(gestureID.uuidString.prefix(8)) fingers=\(fingerCount)", subsystem: "transition")
+        AppLogger.log("session begin gesture=\(gestureID.uuidString.prefix(8)) fingers=\(fingerCount) sessionID=\(sessionID)", subsystem: "transition")
         sessionWindow        = window
         sessionFingerCount   = fingerCount
         sessionStartLocation = location
@@ -102,7 +102,7 @@ public final class SpatialTransitionEngine {
 
     /// Finalizes the gesture. Dispatches to the state machine (2-finger) or a
     /// multi-window operation (3/4-finger).
-    func commitSession(effectiveX: CGFloat, effectiveY: CGFloat, fingerCount: Int, at location: CGPoint) {
+    func commitSession(effectiveX: CGFloat, effectiveY: CGFloat, fingerCount: Int, at location: CGPoint, sessionID: String = "") {
         // GESTURE ENTRY
 #if DEBUG
         // GUARD 2 — session state sanity
@@ -134,14 +134,14 @@ public final class SpatialTransitionEngine {
                 executeAutoLayout(triggerWindow: window, sessionID: sessionID)
             }
         } else {
-            guard let dir = direction else { cancelSession(); return }
+            guard let dir = direction else { cancelSession(sessionID: sessionID); return }
             switch dir {
             case .up:
                 executeUpSwipeAction(window: window)
             case .down:
                 executeDownSwipeAction(window: window)
             case .left, .right:
-                executeStateTransition(direction: dir, for: window)
+                executeStateTransition(direction: dir, for: window, sessionID: sessionID)
             }
         }
     }
@@ -153,7 +153,7 @@ public final class SpatialTransitionEngine {
             PreviewManager.shared.dismiss(animated: true, sessionID: sessionID)
             return
         }
-        animator.animateWindowFrame(window, to: sessionStartFrame, duration: 0.120, sessionID: sessionID)
+        animator.animateWindowFrame(window, to: sessionStartFrame, duration: 0.120, sessionID: sessionID, source: .gesture)
         PreviewManager.shared.dismiss(animated: true, sessionID: sessionID)
     }
 
@@ -180,7 +180,7 @@ public final class SpatialTransitionEngine {
         defer { clearSession() }
         AppLogger.log("shift resize session cancelled; restoring frame gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "transition")
         guard let window = sessionWindow, !sessionStartFrame.isEmpty else { return }
-        animator.animateWindowFrame(window, to: sessionStartFrame, duration: 0.120)
+        animator.animateWindowFrame(window, to: sessionStartFrame, duration: 0.120, source: .gesture)
         PreviewManager.shared.dismiss(animated: true)
     }
 
@@ -193,7 +193,7 @@ public final class SpatialTransitionEngine {
         guard let nextState = graph.nextState(from: currentState, moving: direction) else {
             AppLogger.log("no transition available gesture=\(currentGestureID.uuidString.prefix(8)) from=\(currentState) direction=\(direction)", subsystem: "transition")
             // Edge of the graph — snap back
-            animator.animateWindowFrame(window, to: sessionStartFrame, duration: 0.120, sessionID: sessionID)
+            animator.animateWindowFrame(window, to: sessionStartFrame, duration: 0.120, sessionID: sessionID, source: .gesture)
             PreviewManager.shared.dismiss(animated: true, sessionID: sessionID)
             return
         }
@@ -212,7 +212,7 @@ public final class SpatialTransitionEngine {
         let targetFrame = targetFrame(for: nextState, window: window, screen: sessionScreenFrame)
 
         PreviewManager.shared.commitOverlay(finalFrame: targetFrame, sessionID: sessionID)
-        animator.animateWindowFrame(window, to: targetFrame, sessionID: sessionID)
+        animator.animateWindowFrame(window, to: targetFrame, sessionID: sessionID, source: .gesture)
     }
 
     // MARK: - 2-finger Vertical Actions
@@ -230,7 +230,7 @@ public final class SpatialTransitionEngine {
 
         if ReLaySettings.hapticsEnabled { NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now) }
         PreviewManager.shared.commitOverlay(finalFrame: target)
-        animator.animateWindowFrame(window, to: target)
+        animator.animateWindowFrame(window, to: target, source: .gesture)
     }
 
     private func executeMinimize(window: AXUIElement) {
@@ -251,7 +251,7 @@ public final class SpatialTransitionEngine {
         }
         if ReLaySettings.hapticsEnabled { NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now) }
         PreviewManager.shared.commitOverlay(finalFrame: target)
-        animator.animateWindowFrame(window, to: target)
+        animator.animateWindowFrame(window, to: target, source: .gesture)
     }
 
     private func executeUpSwipeAction(window: AXUIElement) {
@@ -310,7 +310,7 @@ public final class SpatialTransitionEngine {
 
         for (idx, slot) in template.slots.enumerated() where idx < windows.count {
             let target = template.frame(for: slot, in: screenFrame)
-            animator.animateWindowFrame(windows[idx], to: target)
+            animator.animateWindowFrame(windows[idx], to: target, source: .gesture)
         }
 
         lastExposeState = (template, windows, screenFrame)
@@ -331,12 +331,12 @@ public final class SpatialTransitionEngine {
         }
         AppLogger.log("performing undo for \(frames.count) windows", subsystem: "transition")
         for (id, frame) in frames {
-            animator.animateWindowFrame(id.element, to: frame)
+            animator.animateWindowFrame(id.element, to: frame, source: .gesture)
         }
         lastExposeUndoFrames = nil
     }
 
-    private func executeAutoLayout(triggerWindow: AXUIElement) {
+    private func executeAutoLayout(triggerWindow: AXUIElement, sessionID: String = "") {
 #if DEBUG
         // GUARD 2 — session state sanity
         if sessionScreenFrame == .zero {
@@ -357,7 +357,7 @@ public final class SpatialTransitionEngine {
         }
 
         PreviewManager.shared.commitOverlay(finalFrame: target, sessionID: sessionID)
-        animator.animateWindowFrame(triggerWindow, to: target, sessionID: sessionID)
+        animator.animateWindowFrame(triggerWindow, to: target, sessionID: sessionID, source: .gesture)
     }
 
     private func executeThreeColumnLayout(triggerWindow: AXUIElement) {
@@ -382,7 +382,7 @@ public final class SpatialTransitionEngine {
         PreviewManager.shared.dismiss(animated: false, sessionID: sessionID)
     }
 
-    private func executeStageManagerLayout(triggerWindow: AXUIElement) {
+    private func executeStageManagerLayout(triggerWindow: AXUIElement, sessionID: String = "") {
         AppLogger.log("transition request stage-manager layout gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "transition")
         let screen = sessionScreenFrame != .zero ? sessionScreenFrame : animator.getUsableScreenFrame(for: triggerWindow)
         let windows = animator.getAllVisibleWindows()
@@ -399,7 +399,7 @@ public final class SpatialTransitionEngine {
         PreviewManager.shared.dismiss(animated: false, sessionID: sessionID)
     }
 
-    private func executeExitLayout(triggerWindow: AXUIElement) {
+    private func executeExitLayout(triggerWindow: AXUIElement, sessionID: String = "") {
         AppLogger.log("transition request exit-layout gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "transition")
         // Exit native full screen first if applicable
         var fsRef: CFTypeRef?
@@ -413,7 +413,7 @@ public final class SpatialTransitionEngine {
         // Restore tiled layout
         if isInTiledMode {
             for entry in tiledEntries {
-                animator.animateWindowFrame(entry.window, to: entry.original, sessionID: sessionID)
+                animator.animateWindowFrame(entry.window, to: entry.original, sessionID: sessionID, source: .gesture)
             }
             tiledEntries = []
             if stageManagerWasEnabled { animator.setStageManager(true) }
