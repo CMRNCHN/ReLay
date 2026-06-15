@@ -336,7 +336,7 @@ public final class SpatialTransitionEngine {
         lastExposeUndoFrames = nil
     }
 
-    private func executeAutoLayout(triggerWindow: AXUIElement) {
+    private func executeAutoLayout(triggerWindow: AXUIElement, sessionID: String = "") {
 #if DEBUG
         // GUARD 2 — session state sanity
         if sessionScreenFrame == .zero {
