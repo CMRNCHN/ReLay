@@ -224,7 +224,7 @@ class LayoutOrchestrator {
 
         guard let start = getWindowFrame(window) else {
             AppLogger.log("animation immediate frame set (no current frame)", subsystem: "orchestrator")
-            setWindowFrame(window, frame: target)
+            setWindowFrame(window, frame: target, source: source)
             return
         }
 
