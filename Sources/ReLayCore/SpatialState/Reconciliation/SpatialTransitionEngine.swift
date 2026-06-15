@@ -49,10 +49,10 @@ public final class SpatialTransitionEngine {
 
     // MARK: - Gesture Session Lifecycle
 
-    func beginSession(window: AXUIElement, fingerCount: Int, at location: CGPoint, gestureID: UUID = UUID()) {
+    func beginSession(window: AXUIElement, fingerCount: Int, at location: CGPoint, gestureID: UUID = UUID(), sessionID: String = "") {
         // GESTURE ENTRY
         currentGestureID = gestureID
-        AppLogger.log("session begin gesture=\(gestureID.uuidString.prefix(8)) fingers=\(fingerCount)", subsystem: "transition")
+        AppLogger.log("session begin gesture=\(gestureID.uuidString.prefix(8)) fingers=\(fingerCount) sessionID=\(sessionID)", subsystem: "transition")
         sessionWindow        = window
         sessionFingerCount   = fingerCount
         sessionStartLocation = location
