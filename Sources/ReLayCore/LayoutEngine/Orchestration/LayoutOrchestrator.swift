@@ -244,7 +244,7 @@ class LayoutOrchestrator {
                 y:      start.origin.y + (target.origin.y - start.origin.y) * p,
                 width:  start.width    + (target.width     - start.width)    * p,
                 height: start.height   + (target.height    - start.height)   * p
-            ))
+            ), source: source)
         }
         RunLoop.main.add(timer, forMode: .common)
         activeAnimations[id] = timer
