@@ -222,13 +222,7 @@ class LayoutOrchestrator {
         return v > 0 ? v : 0.220
     }
 
-    func animateWindowFrame(_ window: AXUIElement, to target: CGRect, duration: TimeInterval? = nil, sessionID: String? = nil, source: String = "unknown") {
-#if DEBUG
-        // GUARD 3 — execution path enforcement
-        if source != "gesture" && source != "expose" {
-            AppLogger.log("STRICT: animateWindowFrame called with untagged source=\(source)", subsystem: "orchestrator")
-        }
-#endif
+    func animateWindowFrame(_ window: AXUIElement, to target: CGRect, duration: TimeInterval? = nil, sessionID: String? = nil, source: FrameSource) {
         let duration = duration ?? snapDuration
         let id = WindowID(element: window)
         activeAnimations[id]?.invalidate()
