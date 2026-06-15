@@ -351,7 +351,7 @@ public final class TitleBarInterceptor {
             let velocity = sqrt(deltaX * deltaX + deltaY * deltaY) * 60.0 
             
             AppLogger.log("scroll phase changed while tracking gesture=\(pendingGestureID.uuidString.prefix(8))", subsystem: "interceptor")
-            delegate?.gestureDidChange(deltaX: deltaX, deltaY: deltaY, velocity: velocity)
+            delegate?.gestureDidChange(deltaX: deltaX, deltaY: deltaY, velocity: velocity, sessionID: sessionID)
             return nil // Swallow event
         }
 
