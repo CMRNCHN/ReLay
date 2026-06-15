@@ -107,7 +107,7 @@ public final class GestureEngine: TitleBarInterceptorDelegate {
 
         if velocity > (thresholds["flickVelocity"] ?? 800.0) {
             AppLogger.log("gesture commit via flick velocity gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "gesture")
-            commit(effectiveX: effectiveX, effectiveY: effectiveY)
+            commit(effectiveX: effectiveX, effectiveY: effectiveY, sessionID: sessionID)
         }
     }
 
