@@ -209,7 +209,7 @@ class LayoutOrchestrator {
         return v > 0 ? v : 0.220
     }
 
-    func animateWindowFrame(_ window: AXUIElement, to target: CGRect, duration: TimeInterval? = nil, source: String = "unknown") {
+    func animateWindowFrame(_ window: AXUIElement, to target: CGRect, duration: TimeInterval? = nil, sessionID: String? = nil, source: String = "unknown") {
 #if DEBUG
         // GUARD 3 — execution path enforcement
         if source != "gesture" && source != "expose" {
@@ -220,10 +220,15 @@ class LayoutOrchestrator {
         let id = WindowID(element: window)
         activeAnimations[id]?.invalidate()
 
+        AppLogger.log("animation start target=\(target.debugDescription) duration=\(duration)", subsystem: "orchestrator")
+
         guard let start = getWindowFrame(window) else {
+            AppLogger.log("animation immediate frame set (no current frame)", subsystem: "orchestrator")
             setWindowFrame(window, frame: target)
             return
         }
+
+        AppLogger.log("animation easing from \(start.debugDescription) to \(target.debugDescription)", subsystem: "orchestrator")
 
         let t0 = Date()
         let timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] timer in
@@ -231,6 +236,7 @@ class LayoutOrchestrator {
             var t = CGFloat(Date().timeIntervalSince(t0) / duration)
             if t >= 1.0 {
                 t = 1.0; timer.invalidate(); self.activeAnimations.removeValue(forKey: id)
+                AppLogger.log("animation complete", subsystem: "orchestrator")
             }
             let p = self.spring(t)
             self.setWindowFrame(window, frame: CGRect(
