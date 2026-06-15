@@ -59,7 +59,8 @@ public final class GestureEngine: TitleBarInterceptorDelegate {
         NotificationCenter.default.post(name: NSNotification.Name("ReLayEmergencyStop"), object: nil)
     }
 
-    public func gestureDidChange(deltaX: CGFloat, deltaY: CGFloat, velocity: CGFloat) {
+    public func gestureDidChange(deltaX: CGFloat, deltaY: CGFloat, velocity: CGFloat, sessionID: String) {
+        self.sessionID = sessionID
         if isShiftMode {
             SpatialTransitionEngine.shared.applyResizeDelta(deltaY: deltaY)
             return
@@ -86,7 +87,7 @@ public final class GestureEngine: TitleBarInterceptorDelegate {
             } else if max(absX, absY) > (thresholds["cancelThreshold"] ?? 25.0) {
                 // Diagonal movement beyond ambiguity window — cancel
                 AppLogger.log("gesture cancelled due to diagonal ambiguity gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "gesture")
-                gestureDidCancel()
+                gestureDidCancel(sessionID: sessionID)
                 return
             }
             guard axisLocked != nil else { return }
