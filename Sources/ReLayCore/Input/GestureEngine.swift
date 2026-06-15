@@ -142,6 +142,7 @@ public final class GestureEngine: TitleBarInterceptorDelegate {
     }
 
     public func gestureDidCancel(sessionID: String) {
+        self.sessionID = sessionID
         if isShiftMode {
             AppLogger.log("shift resize session cancelled gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "gesture")
             SpatialTransitionEngine.shared.cancelResizeSession()
