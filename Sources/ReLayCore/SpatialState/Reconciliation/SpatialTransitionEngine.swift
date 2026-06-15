@@ -102,7 +102,7 @@ public final class SpatialTransitionEngine {
 
     /// Finalizes the gesture. Dispatches to the state machine (2-finger) or a
     /// multi-window operation (3/4-finger).
-    func commitSession(effectiveX: CGFloat, effectiveY: CGFloat, fingerCount: Int, at location: CGPoint) {
+    func commitSession(effectiveX: CGFloat, effectiveY: CGFloat, fingerCount: Int, at location: CGPoint, sessionID: String = "") {
         // GESTURE ENTRY
 #if DEBUG
         // GUARD 2 — session state sanity
@@ -134,14 +134,14 @@ public final class SpatialTransitionEngine {
                 executeAutoLayout(triggerWindow: window, sessionID: sessionID)
             }
         } else {
-            guard let dir = direction else { cancelSession(); return }
+            guard let dir = direction else { cancelSession(sessionID: sessionID); return }
             switch dir {
             case .up:
                 executeUpSwipeAction(window: window)
             case .down:
                 executeDownSwipeAction(window: window)
             case .left, .right:
-                executeStateTransition(direction: dir, for: window)
+                executeStateTransition(direction: dir, for: window, sessionID: sessionID)
             }
         }
     }
