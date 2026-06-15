@@ -5,6 +5,14 @@ import Accessibility
 // ONLY VALID FRAME WRITER — all AX frame writes in the system must go through this file.
 // Do not call AXUIElementSetAttributeValue for position/size from any other layer.
 
+/// Frame mutation origin - required for all layout changes to be attributable.
+enum FrameSource {
+    case gesture
+    case spatialEngine
+    case system
+    case programmatic
+}
+
 /// Low-level animation and AX primitive layer.
 /// No layout semantics, no state machine — pure window manipulation.
 class LayoutOrchestrator {
