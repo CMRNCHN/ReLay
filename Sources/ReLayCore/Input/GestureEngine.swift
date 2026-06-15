@@ -111,7 +111,8 @@ public final class GestureEngine: TitleBarInterceptorDelegate {
         }
     }
 
-    public func gestureDidEnd() {
+    public func gestureDidEnd(sessionID: String) {
+        self.sessionID = sessionID
         if isShiftMode {
             AppLogger.log("shift resize session ended gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "gesture")
             SpatialTransitionEngine.shared.endResizeSession()
@@ -125,7 +126,7 @@ public final class GestureEngine: TitleBarInterceptorDelegate {
         }
         guard !hasCommitted, let lockedAxis = axisLocked else {
             AppLogger.log("gesture ended without locked axis; cancelling gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "gesture")
-            gestureDidCancel()
+            gestureDidCancel(sessionID: sessionID)
             return
         }
         let effectiveX = lockedAxis == .horizontal ? accumulatedX : 0
@@ -133,14 +134,14 @@ public final class GestureEngine: TitleBarInterceptorDelegate {
         let actionVal  = thresholds["actionThreshold"] ?? 100.0
         if abs(effectiveX) > actionVal || abs(effectiveY) > actionVal {
             AppLogger.log("gesture commit via distance threshold gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "gesture")
-            commit(effectiveX: effectiveX, effectiveY: effectiveY)
+            commit(effectiveX: effectiveX, effectiveY: effectiveY, sessionID: sessionID)
         } else {
             AppLogger.log("gesture ended below action threshold; cancelling gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "gesture")
-            gestureDidCancel()
+            gestureDidCancel(sessionID: sessionID)
         }
     }
 
-    public func gestureDidCancel() {
+    public func gestureDidCancel(sessionID: String) {
         if isShiftMode {
             AppLogger.log("shift resize session cancelled gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "gesture")
             SpatialTransitionEngine.shared.cancelResizeSession()
