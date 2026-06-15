@@ -4,8 +4,8 @@ import Accessibility
 
 /// Delegate protocol to pass clean gesture lifecycle events to the Gesture Engine.
 public protocol TitleBarInterceptorDelegate: AnyObject {
-    func gestureDidBegin(on window: AXUIElement, at location: CGPoint, fingerCount: Int, shiftHeld: Bool, gestureID: UUID)
-    func gestureDidChange(deltaX: CGFloat, deltaY: CGFloat, velocity: CGFloat)
+    func gestureDidBegin(on window: AXUIElement, at location: CGPoint, fingerCount: Int, shiftHeld: Bool, gestureID: UUID, sessionID: String)
+    func gestureDidChange(deltaX: CGFloat, deltaY: CGFloat, velocity: CGFloat, sessionID: String)
     func gestureDidEnd(sessionID: String)
     func gestureDidCancel(sessionID: String)
     func gestureDidDoubleTap(on window: AXUIElement)
