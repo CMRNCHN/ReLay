@@ -382,7 +382,7 @@ public final class SpatialTransitionEngine {
         PreviewManager.shared.dismiss(animated: false, sessionID: sessionID)
     }
 
-    private func executeStageManagerLayout(triggerWindow: AXUIElement) {
+    private func executeStageManagerLayout(triggerWindow: AXUIElement, sessionID: String = "") {
         AppLogger.log("transition request stage-manager layout gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "transition")
         let screen = sessionScreenFrame != .zero ? sessionScreenFrame : animator.getUsableScreenFrame(for: triggerWindow)
         let windows = animator.getAllVisibleWindows()
