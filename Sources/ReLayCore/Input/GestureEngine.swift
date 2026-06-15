@@ -158,7 +158,7 @@ public final class GestureEngine: TitleBarInterceptorDelegate {
         }
         hasCommitted = true
         AppLogger.log("gesture cancelled gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "gesture")
-        SpatialTransitionEngine.shared.cancelSession()
+        SpatialTransitionEngine.shared.cancelSession(sessionID: sessionID)
         resetState()
     }
 
