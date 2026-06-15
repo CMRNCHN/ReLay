@@ -38,7 +38,7 @@ public final class GestureEngine: TitleBarInterceptorDelegate {
 
     // MARK: - TitleBarInterceptorDelegate
 
-    public func gestureDidBegin(on window: AXUIElement, at location: CGPoint, fingerCount: Int, shiftHeld: Bool, gestureID: UUID) {
+    public func gestureDidBegin(on window: AXUIElement, at location: CGPoint, fingerCount: Int, shiftHeld: Bool, gestureID: UUID, sessionID: String) {
         axisLocked         = nil
         accumulatedX       = 0
         accumulatedY       = 0
@@ -47,8 +47,9 @@ public final class GestureEngine: TitleBarInterceptorDelegate {
         startLocation      = location
         isShiftMode        = shiftHeld && fingerCount == 2
         currentGestureID   = gestureID
+        self.sessionID     = sessionID
         AppLogger.log("gesture began gesture=\(gestureID.uuidString.prefix(8)) fingers=\(fingerCount) shiftMode=\(isShiftMode)", subsystem: "gesture")
-        SpatialTransitionEngine.shared.beginSession(window: window, fingerCount: fingerCount, at: location, gestureID: gestureID)
+        SpatialTransitionEngine.shared.beginSession(window: window, fingerCount: fingerCount, at: location, gestureID: gestureID, sessionID: sessionID)
     }
 
     public func gestureDidDoubleTap(on window: AXUIElement, sessionID: String) {}
