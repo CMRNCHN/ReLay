@@ -194,12 +194,17 @@ class LayoutOrchestrator {
 #endif
         var pos = frame.origin, size = frame.size
         guard let posVal  = AXValueCreate(.cgPoint, &pos),
-              let sizeVal = AXValueCreate(.cgSize,  &size) else { return false }
+              let sizeVal = AXValueCreate(.cgSize,  &size) else {
+            AppLogger.log("window set frame FAILED to create AXValue", subsystem: "window")
+            return false
+        }
         // size → position → size avoids macOS off-screen clamping
         let r1 = AXUIElementSetAttributeValue(window, kAXSizeAttribute     as CFString, sizeVal)
         let r2 = AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, posVal)
         let r3 = AXUIElementSetAttributeValue(window, kAXSizeAttribute     as CFString, sizeVal)
-        return r1 == .success && r2 == .success && r3 == .success
+        let success = r1 == .success && r2 == .success && r3 == .success
+        AppLogger.log("window set frame result=\(success ? "ok" : "failed") r1=\(r1.rawValue) r2=\(r2.rawValue) r3=\(r3.rawValue) frame=\(frame.debugDescription)", subsystem: "window")
+        return success
     }
 
     // MARK: - Spring Animation
