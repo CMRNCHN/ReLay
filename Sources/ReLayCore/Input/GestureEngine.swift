@@ -34,6 +34,7 @@ public final class GestureEngine: TitleBarInterceptorDelegate {
     private var startLocation:     CGPoint = .zero
     private var isShiftMode:       Bool    = false
     private var currentGestureID:  UUID    = UUID()
+    private var sessionID:         String  = ""
 
     // MARK: - TitleBarInterceptorDelegate
 
