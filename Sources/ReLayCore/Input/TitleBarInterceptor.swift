@@ -307,7 +307,7 @@ public final class TitleBarInterceptor {
                 activeTargetWindow = window
                 let shiftHeld = NSEvent.modifierFlags.contains(.shift)
                 AppLogger.log("title bar hit; beginning gesture tracking fingers=\(lastKnownTouchCount) shift=\(shiftHeld) gesture=\(pendingGestureID.uuidString.prefix(8))", subsystem: "interceptor")
-                delegate?.gestureDidBegin(on: window, at: location, fingerCount: lastKnownTouchCount, shiftHeld: shiftHeld, gestureID: pendingGestureID)
+                delegate?.gestureDidBegin(on: window, at: location, fingerCount: lastKnownTouchCount, shiftHeld: shiftHeld, gestureID: pendingGestureID, sessionID: sessionID)
                 
                 // Swallow the event to prevent underlying scroll
                 return nil
