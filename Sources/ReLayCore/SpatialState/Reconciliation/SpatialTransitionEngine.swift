@@ -212,7 +212,7 @@ public final class SpatialTransitionEngine {
         let targetFrame = targetFrame(for: nextState, window: window, screen: sessionScreenFrame)
 
         PreviewManager.shared.commitOverlay(finalFrame: targetFrame, sessionID: sessionID)
-        animator.animateWindowFrame(window, to: targetFrame, sessionID: sessionID)
+        animator.animateWindowFrame(window, to: targetFrame, sessionID: sessionID, source: .gesture)
     }
 
     // MARK: - 2-finger Vertical Actions
