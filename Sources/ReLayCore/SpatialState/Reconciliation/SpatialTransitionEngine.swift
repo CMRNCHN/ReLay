@@ -153,7 +153,7 @@ public final class SpatialTransitionEngine {
             PreviewManager.shared.dismiss(animated: true, sessionID: sessionID)
             return
         }
-        animator.animateWindowFrame(window, to: sessionStartFrame, duration: 0.120, sessionID: sessionID)
+        animator.animateWindowFrame(window, to: sessionStartFrame, duration: 0.120, sessionID: sessionID, source: .gesture)
         PreviewManager.shared.dismiss(animated: true, sessionID: sessionID)
     }
 
