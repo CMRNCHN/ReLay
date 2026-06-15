@@ -55,7 +55,7 @@ public final class GestureEngine: TitleBarInterceptorDelegate {
     public func gestureDidDoubleTap(on window: AXUIElement, sessionID: String) {}
 
     public func killSwitchTriggered() {
-        gestureDidCancel()
+        gestureDidCancel(sessionID: sessionID)
         NotificationCenter.default.post(name: NSNotification.Name("ReLayEmergencyStop"), object: nil)
     }
 
