@@ -7,14 +7,12 @@ private let kLayoutAppPasteboardType = NSPasteboard.PasteboardType("com.relay.la
 
 // MARK: - LayoutLibraryController
 
-/// Single source of truth for layout management UI.
-/// Replaces LayoutExposeController. All callers route through this singleton.
 public final class LayoutLibraryController: NSWindowController {
     public static let shared = LayoutLibraryController()
 
     private let orchestrator = LayoutOrchestrator.shared
-    private let history = LayoutHistoryStore.shared
-    private let appLibrary = AppLibraryStore.shared
+    private let history      = LayoutHistoryStore.shared
+    private let appLibrary   = AppLibraryStore.shared
 
     public private(set) var isPresented: Bool = false
 
@@ -23,13 +21,13 @@ public final class LayoutLibraryController: NSWindowController {
     private var triggerWindow: AXUIElement?
     private var currentWindows: [LayoutWindowItem] = []
 
-    private var sidebarView: LibrarySidebarView?
+    private var templateStrip: LayoutTemplateStrip?
     private var canvasView: LibraryCanvasView?
     private var dockView: LibraryAppDockView?
 
     private init() {
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 1060, height: 680),
+            contentRect: NSRect(x: 0, y: 0, width: 960, height: 640),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -51,7 +49,7 @@ public final class LayoutLibraryController: NSWindowController {
         self.triggerWindow = triggerWindow
         currentWindows = makeWindowItems(triggerWindow: triggerWindow)
 
-        // Spatial suggestion — selects best template, but slots start EMPTY
+        // Spatial suggestion — picks best template, slots stay empty
         let screen = orchestrator.getUsableScreenFrame(for: triggerWindow ?? AXUIElementCreateSystemWide())
         let suggestion = LayoutSuggestionEngine.rank(context: LayoutSuggestionEngine.Context(
             windows: currentWindows,
@@ -66,7 +64,7 @@ public final class LayoutLibraryController: NSWindowController {
         selectedTemplateID = suggestion?.template.id
             ?? history.getRecentTemplateIDs().first
             ?? LayoutTemplate.all.first!.id
-        slotAssignments = [:]   // Always start empty — user assigns intentionally
+        slotAssignments = [:]
 
         buildUI()
         center()
@@ -84,6 +82,41 @@ public final class LayoutLibraryController: NSWindowController {
         }
     }
 
+    /// Returns (templateID, displayName) pairs for the most recent layouts.
+    /// Used by the menu bar to populate dynamic items without exposing LayoutTemplate.
+    public func recentMenuItems(max: Int = 4) -> [(id: String, name: String)] {
+        history.getRecentTemplateIDs().prefix(max).compactMap { id in
+            guard let name = LayoutTemplate.all.first(where: { $0.id == id })?.name else { return nil }
+            return (id, name)
+        }
+    }
+
+    /// Instantly tiles visible windows into the named template. Bypasses the Library UI.
+    public func quickApply(templateID: String, triggerWindow: AXUIElement?) {
+        guard let template = LayoutTemplate.all.first(where: { $0.id == templateID }) else { return }
+        let screen = orchestrator.getUsableScreenFrame(for: triggerWindow ?? AXUIElementCreateSystemWide())
+        guard screen != .zero else { return }
+
+        let windows = orchestrator.getAllVisibleWindows()
+        for (i, slot) in template.slots.enumerated() where i < windows.count {
+            orchestrator.animateWindowFrame(windows[i], to: CGRect(
+                x: screen.origin.x + slot.rect.origin.x * screen.width,
+                y: screen.origin.y + slot.rect.origin.y * screen.height,
+                width: slot.rect.width * screen.width,
+                height: slot.rect.height * screen.height
+            ), source: "expose")
+        }
+
+        history.recordApply(event: AppliedLayoutEvent(
+            layoutTemplateID: templateID,
+            workspacePresetID: nil,
+            visibleWindowRoles: [],
+            visibleAppBundleIDs: [],
+            screenAspectRatio: screen.width / max(screen.height, 1),
+            displayCount: NSScreen.screens.count
+        ))
+    }
+
     public func promptSaveCurrentFromMenu() {
         selectedTemplateID = history.getRecentTemplateIDs().first ?? LayoutTemplate.all.first!.id
         slotAssignments = [:]
@@ -99,6 +132,11 @@ public final class LayoutLibraryController: NSWindowController {
     }
 
     // MARK: - Build UI
+    //
+    // Layout (top → bottom):
+    //   [Template strip  112pt] ← hero: large horizontal card row
+    //   [Canvas          flex ] ← slot assignment area
+    //   [App dock         92pt] ← sole drag source
 
     private func buildUI() {
         guard let panel = window else { return }
@@ -117,45 +155,46 @@ public final class LayoutLibraryController: NSWindowController {
         root.autoresizingMask = [.width, .height]
         fx.addSubview(root)
 
-        let sidebarW: CGFloat = 240
-        let dockH: CGFloat = 92
-        let bounds = root.bounds
+        let stripH: CGFloat = 114
+        let dockH:  CGFloat = 92
+        let w = root.bounds.width
+        let h = root.bounds.height
 
-        // Sidebar — template thumbnail cards + saved layouts
-        let sidebar = LibrarySidebarView(
-            frame: CGRect(x: 0, y: 0, width: sidebarW, height: bounds.height),
+        // Template strip — top hero row
+        let strip = LayoutTemplateStrip(
+            frame: CGRect(x: 0, y: h - stripH, width: w, height: stripH),
+            templates: LayoutTemplate.all,
             savedLayouts: history.getSavedLayouts(),
-            recentIDs: history.getRecentTemplateIDs(),
             selectedID: selectedTemplateID,
             onSelect: { [weak self] id in self?.selectTemplate(id) },
             onApplySaved: { [weak self] layout in self?.applySavedLayout(layout) }
         )
-        sidebar.autoresizingMask = [.height]
-        root.addSubview(sidebar)
-        self.sidebarView = sidebar
+        strip.autoresizingMask = [.width, .minYMargin]
+        root.addSubview(strip)
+        self.templateStrip = strip
 
-        // Separator
-        let sep = NSView(frame: CGRect(x: sidebarW, y: 0, width: 1, height: bounds.height))
+        // Separator below strip
+        let sep = NSView(frame: CGRect(x: 0, y: h - stripH - 1, width: w, height: 1))
         sep.wantsLayer = true
-        sep.layer?.backgroundColor = NSColor.separatorColor.withAlphaComponent(0.5).cgColor
-        sep.autoresizingMask = [.height]
+        sep.layer?.backgroundColor = NSColor.separatorColor.withAlphaComponent(0.4).cgColor
+        sep.autoresizingMask = [.width, .minYMargin]
         root.addSubview(sep)
 
-        // App dock — sole drag source
+        // App dock — bottom
         let dock = LibraryAppDockView(
-            frame: CGRect(x: sidebarW + 1, y: 0, width: bounds.width - sidebarW - 1, height: dockH),
+            frame: CGRect(x: 0, y: 0, width: w, height: dockH),
             apps: dockApps()
         )
         dock.autoresizingMask = [.width]
         root.addSubview(dock)
         self.dockView = dock
 
-        // Canvas — large slot grid, assignment target
+        // Canvas — middle, fills remaining space
         let template = LayoutTemplate.all.first(where: { $0.id == selectedTemplateID }) ?? LayoutTemplate.all[0]
+        let canvasY = dockH
+        let canvasH = h - stripH - 1 - dockH
         let canvas = LibraryCanvasView(
-            frame: CGRect(x: sidebarW + 1, y: dockH,
-                          width: bounds.width - sidebarW - 1,
-                          height: bounds.height - dockH),
+            frame: CGRect(x: 0, y: canvasY, width: w, height: canvasH),
             template: template,
             assignments: slotAssignments,
             appLibrary: appLibrary,
@@ -167,9 +206,8 @@ public final class LayoutLibraryController: NSWindowController {
         root.addSubview(canvas)
         self.canvasView = canvas
 
-        // Traffic-light close button
-        let close = makeCloseButton(in: fx)
-        fx.addSubview(close)
+        // Close button
+        fx.addSubview(makeCloseButton(in: fx))
 
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             self?.handleKeyCode(event.keyCode)
@@ -179,7 +217,7 @@ public final class LayoutLibraryController: NSWindowController {
 
     private func cleanupUI() {
         window?.contentView?.subviews.forEach { $0.removeFromSuperview() }
-        sidebarView = nil; canvasView = nil; dockView = nil
+        templateStrip = nil; canvasView = nil; dockView = nil
     }
 
     private func makeCloseButton(in parent: NSView) -> NSButton {
@@ -203,15 +241,15 @@ public final class LayoutLibraryController: NSWindowController {
         guard let panel = window, let screen = NSScreen.main else { window?.orderFront(nil); return }
         let sf = screen.visibleFrame
         let pw = panel.frame
-        let targetY = sf.midY - pw.height / 2
-        panel.setFrameOrigin(CGPoint(x: sf.midX - pw.width / 2, y: targetY - 24))
+        let targetOrigin = CGPoint(x: sf.midX - pw.width / 2, y: sf.midY - pw.height / 2)
+        panel.setFrameOrigin(CGPoint(x: targetOrigin.x, y: targetOrigin.y - 20))
         panel.alphaValue = 0
         panel.orderFront(nil)
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.28
+            ctx.duration = 0.26
             ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.25, 0.46, 0.45, 0.94)
             panel.animator().alphaValue = 1
-            panel.animator().setFrameOrigin(CGPoint(x: sf.midX - pw.width / 2, y: targetY))
+            panel.animator().setFrameOrigin(targetOrigin)
         }
     }
 
@@ -219,10 +257,10 @@ public final class LayoutLibraryController: NSWindowController {
         guard let panel = window else { completion(); return }
         let origin = panel.frame.origin
         NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.18
+            ctx.duration = 0.16
             ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
             panel.animator().alphaValue = 0
-            panel.animator().setFrameOrigin(CGPoint(x: origin.x, y: origin.y - 16))
+            panel.animator().setFrameOrigin(CGPoint(x: origin.x, y: origin.y - 14))
         }, completionHandler: completion)
     }
 
@@ -230,18 +268,21 @@ public final class LayoutLibraryController: NSWindowController {
 
     private func selectTemplate(_ id: String) {
         selectedTemplateID = id
-        slotAssignments = [:]   // slots stay empty on template switch
+        slotAssignments = [:]
         guard let template = LayoutTemplate.all.first(where: { $0.id == id }) else { return }
-        canvasView?.update(template: template, assignments: slotAssignments)
-        sidebarView?.setSelected(id)
+        canvasView?.switchTemplate(template)
+        templateStrip?.setSelected(id)
     }
 
-    // MARK: - Assignment
+    // MARK: - Slot Assignment
 
     private func assignApp(_ bundleID: String, toSlot slotID: Int) {
+        // Remove from any existing slot first
         for (k, v) in slotAssignments where v == bundleID { slotAssignments.removeValue(forKey: k) }
         slotAssignments[slotID] = bundleID
-        canvasView?.update(assignments: slotAssignments)
+        // Update in-place so the spring animation plays on the live slot view
+        let appInfo = appLibrary.app(bundleID: bundleID)
+        canvasView?.dropApp(appInfo, intoSlot: slotID)
     }
 
     // MARK: - Apply
@@ -295,11 +336,12 @@ public final class LayoutLibraryController: NSWindowController {
         alert.beginSheetModal(for: w) { [weak self] response in
             guard response == .alertFirstButtonReturn, let self else { return }
             let name = field.stringValue.trimmingCharacters(in: .whitespaces)
-            let saved = SavedLayout(name: name.isEmpty ? template.name : name,
-                                    templateID: self.selectedTemplateID,
-                                    slotBundleIDs: self.slotAssignments)
-            self.history.saveSavedLayout(saved)
-            self.sidebarView?.reload(saved: self.history.getSavedLayouts())
+            self.history.saveSavedLayout(SavedLayout(
+                name: name.isEmpty ? template.name : name,
+                templateID: self.selectedTemplateID,
+                slotBundleIDs: self.slotAssignments
+            ))
+            self.templateStrip?.reloadSaved(self.history.getSavedLayouts())
         }
     }
 
@@ -307,8 +349,8 @@ public final class LayoutLibraryController: NSWindowController {
         selectedTemplateID = layout.templateID
         slotAssignments = layout.slotBundleIDs
         guard let template = LayoutTemplate.all.first(where: { $0.id == layout.templateID }) else { return }
-        canvasView?.update(template: template, assignments: slotAssignments)
-        sidebarView?.setSelected(layout.templateID)
+        canvasView?.switchTemplate(template, assignments: slotAssignments)
+        templateStrip?.setSelected(layout.templateID)
         history.touchSavedLayout(id: layout.id)
     }
 
@@ -318,8 +360,8 @@ public final class LayoutLibraryController: NSWindowController {
         let running = Set(NSWorkspace.shared.runningApplications.compactMap { $0.bundleIdentifier })
         var apps = appLibrary.allApps
         apps.sort { a, b in
-            let aRun = running.contains(a.id), bRun = running.contains(b.id)
-            if aRun != bRun { return aRun }
+            let ar = running.contains(a.id), br = running.contains(b.id)
+            if ar != br { return ar }
             return a.name < b.name
         }
         return apps
@@ -331,17 +373,15 @@ public final class LayoutLibraryController: NSWindowController {
         panel.setFrameOrigin(CGPoint(x: sf.midX - pw.width / 2, y: sf.midY - pw.height / 2))
     }
 
-    private func axWindow(forBundleID bundleID: String) -> AXUIElement? {
-        guard let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID }) else { return nil }
+    private func axWindow(forBundleID id: String) -> AXUIElement? {
+        guard let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == id }) else { return nil }
         let axApp = AXUIElementCreateApplication(app.processIdentifier)
         var ref: CFTypeRef?
         guard AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &ref) == .success,
               let windows = ref as? [AXUIElement] else { return nil }
         return windows.first { win in
-            var minRef: CFTypeRef?
-            guard AXUIElementCopyAttributeValue(win, kAXMinimizedAttribute as CFString, &minRef) == .success,
-                  let isMin = minRef as? Bool else { return true }
-            return !isMin
+            var v: CFTypeRef?
+            return !(AXUIElementCopyAttributeValue(win, kAXMinimizedAttribute as CFString, &v) == .success && (v as? Bool) == true)
         } ?? windows.first
     }
 
@@ -354,22 +394,19 @@ public final class LayoutLibraryController: NSWindowController {
             guard AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &ref) == .success,
                   let windows = ref as? [AXUIElement] else { continue }
             for win in windows {
-                var minRef: CFTypeRef?
-                if AXUIElementCopyAttributeValue(win, kAXMinimizedAttribute as CFString, &minRef) == .success,
-                   let isMin = minRef as? Bool, isMin { continue }
+                var mv: CFTypeRef?
+                if AXUIElementCopyAttributeValue(win, kAXMinimizedAttribute as CFString, &mv) == .success,
+                   (mv as? Bool) == true { continue }
                 let title = orchestrator.windowTitle(for: win)
-                let role = WindowRoleClassifier.classify(appName: app.localizedName, windowTitle: title)
+                let role  = WindowRoleClassifier.classify(appName: app.localizedName, windowTitle: title)
                 var isActive = false
                 if let tw = triggerWindow {
-                    var twPID: pid_t = 0, winPID: pid_t = 0
-                    AXUIElementGetPid(tw, &twPID); AXUIElementGetPid(win, &winPID)
-                    isActive = twPID == winPID
-                } else {
-                    isActive = app == NSWorkspace.shared.frontmostApplication
-                }
+                    var twPID: pid_t = 0, wPID: pid_t = 0
+                    AXUIElementGetPid(tw, &twPID); AXUIElementGetPid(win, &wPID)
+                    isActive = twPID == wPID
+                } else { isActive = app == NSWorkspace.shared.frontmostApplication }
                 var item = LayoutWindowItem(
-                    id: "\(app.processIdentifier)-\(title)",
-                    element: win, title: title,
+                    id: "\(app.processIdentifier)-\(title)", element: win, title: title,
                     appName: app.localizedName, bundleID: app.bundleIdentifier,
                     appIcon: app.icon, role: role
                 )
@@ -381,204 +418,205 @@ public final class LayoutLibraryController: NSWindowController {
     }
 }
 
-// MARK: - LibrarySidebarView
+// MARK: - LayoutTemplateStrip
+//
+// Horizontal hero row of large template cards. Replaces the vertical sidebar.
+// Cards render the actual slot geometry — the layout IS the thing you click.
 
-final class LibrarySidebarView: NSView {
+final class LayoutTemplateStrip: NSView {
     private var onSelect: (String) -> Void
     private var onApplySaved: (SavedLayout) -> Void
     private var selectedID: String
+    private var templates: [LayoutTemplate]
     private var savedLayouts: [SavedLayout]
+    private var cardViews: [LayoutTemplateCard] = []
     private var scrollView: NSScrollView!
-    private var contentStack: NSStackView!
-    private var cardViews: [LayoutThumbnailCard] = []
+    private var stackView: NSStackView!
 
-    init(frame: CGRect, savedLayouts: [SavedLayout], recentIDs: [String],
+    init(frame: CGRect,
+         templates: [LayoutTemplate],
+         savedLayouts: [SavedLayout],
          selectedID: String,
          onSelect: @escaping (String) -> Void,
          onApplySaved: @escaping (SavedLayout) -> Void) {
+        self.templates    = templates
         self.savedLayouts = savedLayouts
-        self.selectedID = selectedID
-        self.onSelect = onSelect
+        self.selectedID   = selectedID
+        self.onSelect     = onSelect
         self.onApplySaved = onApplySaved
         super.init(frame: frame)
         wantsLayer = true
-        buildContent()
+        build()
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
-    private func buildContent() {
+    private func build() {
         subviews.forEach { $0.removeFromSuperview() }
         cardViews = []
 
-        contentStack = NSStackView()
-        contentStack.orientation = .vertical
-        contentStack.alignment = .leading
-        contentStack.spacing = 6
-        contentStack.edgeInsets = NSEdgeInsets(top: 48, left: 14, bottom: 14, right: 14)
+        stackView = NSStackView()
+        stackView.orientation = .horizontal
+        stackView.spacing = 8
+        stackView.edgeInsets = NSEdgeInsets(top: 12, left: 16, bottom: 12, right: 16)
+        stackView.alignment = .centerY
 
-        // Title
-        let title = NSTextField(labelWithString: "Layout Library")
-        title.font = .systemFont(ofSize: 13, weight: .semibold)
-        title.textColor = .labelColor
-        contentStack.addArrangedSubview(title)
-        contentStack.setCustomSpacing(20, after: title)
-
-        // All Layouts — thumbnail cards
-        addSectionHeader("All Layouts")
-        for template in LayoutTemplate.all {
-            addTemplateCard(id: template.id, name: template.name, template: template, saved: nil)
+        // Template cards
+        for template in templates {
+            addCard(templateID: template.id, name: template.name, template: template, saved: nil)
         }
 
-        // Saved Layouts
+        // Saved layouts — separated by a thin rule
         if !savedLayouts.isEmpty {
-            contentStack.setCustomSpacing(20, after: contentStack.arrangedSubviews.last ?? title)
-            addSectionHeader("Saved")
+            let rule = NSView()
+            rule.wantsLayer = true
+            rule.layer?.backgroundColor = NSColor.separatorColor.withAlphaComponent(0.4).cgColor
+            rule.widthAnchor.constraint(equalToConstant: 1).isActive = true
+            rule.heightAnchor.constraint(equalToConstant: 60).isActive = true
+            stackView.addArrangedSubview(rule)
+
             for saved in savedLayouts {
                 let template = LayoutTemplate.all.first(where: { $0.id == saved.templateID })
-                addTemplateCard(id: saved.templateID, name: saved.name, template: template, saved: saved)
+                addCard(templateID: saved.templateID, name: saved.name, template: template, saved: saved)
             }
         }
 
-        let scrollContent = contentStack
-        let totalH = contentStack.arrangedSubviews.reduce(62.0 + CGFloat(contentStack.arrangedSubviews.count) * 8) { acc, v in
-            acc + v.intrinsicContentSize.height
-        }
-        contentStack.frame = CGRect(x: 0, y: 0, width: bounds.width - 28, height: max(totalH, bounds.height))
+        let totalW = CGFloat(cardViews.count) * (148 + 8) + 32 + CGFloat(savedLayouts.isEmpty ? 0 : 17)
+        stackView.frame = CGRect(x: 0, y: 0, width: max(totalW, bounds.width), height: bounds.height)
 
         scrollView = NSScrollView(frame: bounds)
-        scrollView.documentView = scrollContent
-        scrollView.hasVerticalScroller = true
-        scrollView.autohidesScrollers = true
-        scrollView.drawsBackground = false
-        scrollView.autoresizingMask = [.width, .height]
+        scrollView.documentView = stackView
+        scrollView.hasHorizontalScroller = false
+        scrollView.hasVerticalScroller   = false
+        scrollView.drawsBackground       = false
+        scrollView.autoresizingMask      = [.width, .height]
         addSubview(scrollView)
     }
 
-    private func addSectionHeader(_ text: String) {
-        let label = NSTextField(labelWithString: text.uppercased())
-        label.font = .systemFont(ofSize: 9.5, weight: .semibold)
-        label.textColor = .tertiaryLabelColor
-        contentStack.addArrangedSubview(label)
-        contentStack.setCustomSpacing(6, after: label)
-    }
-
-    private func addTemplateCard(id: String, name: String, template: LayoutTemplate?, saved: SavedLayout?) {
-        let card = LayoutThumbnailCard(
-            templateID: id,
+    private func addCard(templateID: String, name: String, template: LayoutTemplate?, saved: SavedLayout?) {
+        let card = LayoutTemplateCard(
+            templateID: templateID,
             name: name,
             template: template,
-            isSelected: id == selectedID,
+            isSaved: saved != nil,
+            isSelected: templateID == selectedID,
             onTap: { [weak self] in
-                if let saved = saved { self?.onApplySaved(saved) } else { self?.onSelect(id) }
+                if let saved { self?.onApplySaved(saved) } else { self?.onSelect(templateID) }
             }
         )
-        let w = bounds.width - 28
-        card.widthAnchor.constraint(equalToConstant: w).isActive = true
-        contentStack.addArrangedSubview(card)
-        contentStack.setCustomSpacing(4, after: card)
+        stackView.addArrangedSubview(card)
         cardViews.append(card)
     }
 
     func setSelected(_ id: String) {
         selectedID = id
-        cardViews.forEach { $0.setSelected($0.templateID == id) }
+        for card in cardViews { card.setSelected(card.templateID == id) }
     }
 
-    func reload(saved: [SavedLayout]) {
+    func reloadSaved(_ saved: [SavedLayout]) {
         savedLayouts = saved
-        buildContent()
+        build()
     }
 }
 
-// MARK: - LayoutThumbnailCard
+// MARK: - LayoutTemplateCard
+//
+// 148 × 90 pt. The template geometry fills ~70% of the card area.
+// Name sits below. Selected: accent fill. Hover: subtle lift.
 
-final class LayoutThumbnailCard: NSView {
+final class LayoutTemplateCard: NSView {
     let templateID: String
     private let name: String
     private let template: LayoutTemplate?
+    private let isSaved: Bool
     private var isSelected: Bool
-    private var onTap: () -> Void
     private var isHovered = false
+    private var onTap: () -> Void
 
-    init(templateID: String, name: String, template: LayoutTemplate?, isSelected: Bool, onTap: @escaping () -> Void) {
+    init(templateID: String, name: String, template: LayoutTemplate?,
+         isSaved: Bool, isSelected: Bool, onTap: @escaping () -> Void) {
         self.templateID = templateID
-        self.name = name
-        self.template = template
+        self.name       = name
+        self.template   = template
+        self.isSaved    = isSaved
         self.isSelected = isSelected
-        self.onTap = onTap
+        self.onTap      = onTap
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = 10
         translatesAutoresizingMaskIntoConstraints = false
-        heightAnchor.constraint(equalToConstant: 80).isActive = true
-        updateAppearance()
+        widthAnchor.constraint(equalToConstant: 148).isActive = true
+        heightAnchor.constraint(equalToConstant: 90).isActive = true
+        refreshBackground()
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
     func setSelected(_ selected: Bool) {
+        guard isSelected != selected else { return }
         isSelected = selected
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.18
-            self.animator().layer?.backgroundColor = self.cardBackground().cgColor
+            ctx.duration = 0.15
+            self.animator().layer?.backgroundColor = self.cardBG().cgColor
         }
         needsDisplay = true
     }
 
-    private func cardBackground() -> NSColor {
-        if isSelected { return NSColor.controlAccentColor.withAlphaComponent(0.9) }
-        if isHovered { return NSColor.controlAccentColor.withAlphaComponent(0.12) }
-        return NSColor.quaternaryLabelColor.withAlphaComponent(0.3)
+    private func cardBG() -> NSColor {
+        if isSelected { return .controlAccentColor }
+        if isHovered  { return NSColor.controlAccentColor.withAlphaComponent(0.14) }
+        return NSColor.quaternaryLabelColor.withAlphaComponent(0.35)
     }
 
-    private func updateAppearance() {
-        layer?.backgroundColor = cardBackground().cgColor
+    private func refreshBackground() {
+        layer?.backgroundColor = cardBG().cgColor
     }
 
-    // Draw the template slot geometry as a thumbnail
+    // Draws the template slot geometry as a proportional miniature
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        guard let template = template else {
-            // Fallback label for saved-only items with no template
-            let attrs: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 11, weight: .medium),
-                .foregroundColor: isSelected ? NSColor.white : NSColor.labelColor
-            ]
-            name.draw(in: bounds.insetBy(dx: 10, dy: 28), withAttributes: attrs)
-            return
+
+        // Geometry preview occupies upper portion
+        let previewRect = CGRect(x: 10, y: 22, width: bounds.width - 20, height: bounds.height - 38)
+        let gap: CGFloat = 2.5
+
+        let slotFill   = isSelected ? NSColor.white.withAlphaComponent(0.28) : NSColor.labelColor.withAlphaComponent(0.13)
+        let slotStroke = isSelected ? NSColor.white.withAlphaComponent(0.45) : NSColor.labelColor.withAlphaComponent(0.22)
+
+        if let template {
+            for slot in template.slots {
+                let r = CGRect(
+                    x:      previewRect.minX + slot.rect.minX * previewRect.width  + gap,
+                    y:      previewRect.minY + slot.rect.minY * previewRect.height + gap,
+                    width:  slot.rect.width  * previewRect.width  - gap * 2,
+                    height: slot.rect.height * previewRect.height - gap * 2
+                )
+                let path = NSBezierPath(roundedRect: r, xRadius: 3.5, yRadius: 3.5)
+                slotFill.setFill();   path.fill()
+                slotStroke.setStroke(); path.lineWidth = 0.75; path.stroke()
+            }
         }
 
-        let previewRect = CGRect(x: 10, y: 24, width: bounds.width - 20, height: bounds.height - 36)
-        let gap: CGFloat = 2
-        let slotColor = isSelected
-            ? NSColor.white.withAlphaComponent(0.25)
-            : NSColor.labelColor.withAlphaComponent(0.12)
-        let slotBorder = isSelected
-            ? NSColor.white.withAlphaComponent(0.4)
-            : NSColor.labelColor.withAlphaComponent(0.2)
-
-        for slot in template.slots {
-            let r = CGRect(
-                x: previewRect.origin.x + slot.rect.origin.x * previewRect.width + gap,
-                y: previewRect.origin.y + slot.rect.origin.y * previewRect.height + gap,
-                width: slot.rect.width * previewRect.width - gap * 2,
-                height: slot.rect.height * previewRect.height - gap * 2
-            )
-            let path = NSBezierPath(roundedRect: r, xRadius: 3, yRadius: 3)
-            slotColor.setFill()
-            path.fill()
-            slotBorder.setStroke()
-            path.lineWidth = 0.75
-            path.stroke()
-        }
-
-        // Name label below thumbnail
-        let labelAttrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 10.5, weight: isSelected ? .medium : .regular),
-            .foregroundColor: isSelected ? NSColor.white : NSColor.labelColor
+        // Name label
+        let color: NSColor = isSelected ? .white : .labelColor
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 11, weight: isSelected ? .medium : .regular),
+            .foregroundColor: color
         ]
-        name.draw(in: CGRect(x: 10, y: 6, width: bounds.width - 20, height: 16), withAttributes: labelAttrs)
+        name.draw(in: CGRect(x: 10, y: 6, width: bounds.width - 20, height: 16), withAttributes: attrs)
+
+        // Saved badge
+        if isSaved {
+            let badgeColor = isSelected ? NSColor.white.withAlphaComponent(0.7) : NSColor.controlAccentColor
+            let img = NSImage(systemSymbolName: "bookmark.fill", accessibilityDescription: nil)!
+            img.size = NSSize(width: 9, height: 11)
+            let tinted = img.copy() as! NSImage
+            tinted.lockFocus()
+            badgeColor.set()
+            NSRect(origin: .zero, size: tinted.size).fill(using: .sourceAtop)
+            tinted.unlockFocus()
+            tinted.draw(in: CGRect(x: bounds.width - 16, y: bounds.height - 16, width: 9, height: 11))
+        }
     }
 
     override func mouseDown(with event: NSEvent) { onTap() }
@@ -587,16 +625,17 @@ final class LayoutThumbnailCard: NSView {
         guard !isSelected else { return }
         isHovered = true
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.12
-            self.animator().layer?.backgroundColor = self.cardBackground().cgColor
+            ctx.duration = 0.1
+            self.animator().layer?.backgroundColor = self.cardBG().cgColor
         }
     }
 
     override func mouseExited(with event: NSEvent) {
         isHovered = false
+        guard !isSelected else { return }
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.12
-            self.animator().layer?.backgroundColor = self.cardBackground().cgColor
+            ctx.duration = 0.1
+            self.animator().layer?.backgroundColor = self.cardBG().cgColor
         }
     }
 
@@ -620,19 +659,18 @@ final class LibraryCanvasView: NSView {
     private var onSave: () -> Void
     private var slotViews: [Int: LibrarySlotView] = [:]
     private var canvasArea: NSView!
-    private var templateNameLabel: NSTextField!
 
     init(frame: CGRect, template: LayoutTemplate, assignments: [Int: String],
          appLibrary: AppLibraryStore,
-         onDrop: @escaping (Int, String) -> Void,
+         onDrop:  @escaping (Int, String) -> Void,
          onApply: @escaping () -> Void,
-         onSave: @escaping () -> Void) {
-        self.template = template
+         onSave:  @escaping () -> Void) {
+        self.template    = template
         self.assignments = assignments
-        self.appLibrary = appLibrary
-        self.onDrop = onDrop
-        self.onApply = onApply
-        self.onSave = onSave
+        self.appLibrary  = appLibrary
+        self.onDrop      = onDrop
+        self.onApply     = onApply
+        self.onSave      = onSave
         super.init(frame: frame)
         wantsLayer = true
         buildCanvas()
@@ -644,21 +682,18 @@ final class LibraryCanvasView: NSView {
         subviews.forEach { $0.removeFromSuperview() }
         slotViews = [:]
 
-        // Template name
-        templateNameLabel = NSTextField(labelWithString: template.name)
-        templateNameLabel.font = .systemFont(ofSize: 20, weight: .semibold)
-        templateNameLabel.textColor = .labelColor
-        templateNameLabel.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(templateNameLabel)
+        let nameLabel = NSTextField(labelWithString: template.name)
+        nameLabel.font = .systemFont(ofSize: 20, weight: .semibold)
+        nameLabel.textColor = .labelColor
+        nameLabel.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(nameLabel)
 
-        // Slot hint
         let hint = NSTextField(labelWithString: "Drag apps from the shelf below into slots")
         hint.font = .systemFont(ofSize: 11.5)
         hint.textColor = .tertiaryLabelColor
         hint.translatesAutoresizingMaskIntoConstraints = false
         addSubview(hint)
 
-        // Canvas area
         canvasArea = NSView()
         canvasArea.wantsLayer = true
         canvasArea.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.05).cgColor
@@ -666,33 +701,31 @@ final class LibraryCanvasView: NSView {
         canvasArea.translatesAutoresizingMaskIntoConstraints = false
         addSubview(canvasArea)
 
-        // Apply button
         let applyBtn = makeApplyButton()
         addSubview(applyBtn)
-
         let saveBtn = NSButton(title: "Save…", target: self, action: #selector(saveTapped))
         saveBtn.bezelStyle = .roundRect
         saveBtn.translatesAutoresizingMaskIntoConstraints = false
         addSubview(saveBtn)
 
         NSLayoutConstraint.activate([
-            templateNameLabel.topAnchor.constraint(equalTo: topAnchor, constant: 22),
-            templateNameLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 28),
+            nameLabel.topAnchor.constraint(equalTo: topAnchor, constant: 22),
+            nameLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 28),
 
-            hint.topAnchor.constraint(equalTo: templateNameLabel.bottomAnchor, constant: 2),
+            hint.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: 2),
             hint.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 28),
 
-            canvasArea.topAnchor.constraint(equalTo: hint.bottomAnchor, constant: 16),
+            canvasArea.topAnchor.constraint(equalTo: hint.bottomAnchor, constant: 14),
             canvasArea.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 28),
             canvasArea.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -28),
-            canvasArea.bottomAnchor.constraint(equalTo: applyBtn.topAnchor, constant: -16),
+            canvasArea.bottomAnchor.constraint(equalTo: applyBtn.topAnchor, constant: -14),
 
-            applyBtn.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -22),
+            applyBtn.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -20),
             applyBtn.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -28),
             applyBtn.widthAnchor.constraint(equalToConstant: 140),
             applyBtn.heightAnchor.constraint(equalToConstant: 34),
 
-            saveBtn.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -22),
+            saveBtn.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -20),
             saveBtn.trailingAnchor.constraint(equalTo: applyBtn.leadingAnchor, constant: -8),
             saveBtn.heightAnchor.constraint(equalToConstant: 34),
         ])
@@ -714,36 +747,42 @@ final class LibraryCanvasView: NSView {
     }
 
     private func buildSlots() {
+        slotViews.values.forEach { $0.removeFromSuperview() }
+        slotViews = [:]
         let aw = canvasArea.bounds.width, ah = canvasArea.bounds.height
         guard aw > 10, ah > 10 else {
             DispatchQueue.main.async { [weak self] in self?.buildSlots() }
             return
         }
-        let pad: CGFloat = 18
+        let pad: CGFloat = 16
         let inner = CGRect(x: pad, y: pad, width: aw - pad * 2, height: ah - pad * 2)
-
         for slot in template.slots {
             let f = CGRect(
-                x: inner.origin.x + slot.rect.origin.x * inner.width,
-                y: inner.origin.y + slot.rect.origin.y * inner.height,
+                x: inner.minX + slot.rect.minX * inner.width,
+                y: inner.minY + slot.rect.minY * inner.height,
                 width: slot.rect.width * inner.width,
                 height: slot.rect.height * inner.height
             ).insetBy(dx: 5, dy: 5)
-
             let appInfo = assignments[slot.id].flatMap { appLibrary.app(bundleID: $0) }
-            let sv = LibrarySlotView(
-                frame: f, slotID: slot.id, appInfo: appInfo,
-                onDrop: { [weak self] bid in self?.onDrop(slot.id, bid) }
-            )
+            let sv = LibrarySlotView(frame: f, slotID: slot.id, appInfo: appInfo) { [weak self] bid in
+                self?.onDrop(slot.id, bid)
+            }
             canvasArea.addSubview(sv)
             slotViews[slot.id] = sv
         }
     }
 
-    func update(template: LayoutTemplate? = nil, assignments: [Int: String]) {
-        if let t = template { self.template = t }
+    // Switch to a new template — full rebuild
+    func switchTemplate(_ template: LayoutTemplate, assignments: [Int: String] = [:]) {
+        self.template = template
         self.assignments = assignments
         buildCanvas()
+    }
+
+    // Update a single slot in-place — used for drag/drop so spring plays on the live view
+    func dropApp(_ appInfo: AppInfo?, intoSlot slotID: Int) {
+        guard let sv = slotViews[slotID] else { return }
+        sv.assignApp(appInfo)
     }
 
     @objc private func applyTapped() { onApply() }
@@ -759,18 +798,33 @@ final class LibrarySlotView: NSView {
     private var isDropTarget = false
 
     init(frame: CGRect, slotID: Int, appInfo: AppInfo?, onDrop: @escaping (String) -> Void) {
-        self.slotID = slotID
+        self.slotID  = slotID
         self.appInfo = appInfo
-        self.onDrop = onDrop
+        self.onDrop  = onDrop
         super.init(frame: frame)
         wantsLayer = true
         layer?.cornerRadius = 12
-        layer?.borderWidth = 1.5
+        layer?.borderWidth  = 1.5
         registerForDraggedTypes([kLayoutAppPasteboardType])
         refresh()
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    // Called from canvasView.dropApp(_:intoSlot:) — updates content then springs
+    func assignApp(_ info: AppInfo?) {
+        appInfo = info
+        refresh()
+        // Spring plays on the now-updated view
+        let spring = CASpringAnimation(keyPath: "transform.scale")
+        spring.fromValue   = 1.08
+        spring.toValue     = 1.0
+        spring.mass        = 1
+        spring.stiffness   = 280
+        spring.damping     = 20
+        spring.duration    = spring.settlingDuration
+        layer?.add(spring, forKey: "spring")
+    }
 
     private func refresh() {
         subviews.forEach { $0.removeFromSuperview() }
@@ -783,12 +837,12 @@ final class LibrarySlotView: NSView {
 
         if let app = appInfo {
             let iconSize: CGFloat = min(bounds.width, bounds.height) * 0.44
-            let iconView = NSImageView(image: app.icon ?? defaultAppIcon())
-            iconView.imageScaling = .scaleProportionallyUpOrDown
-            iconView.frame = CGRect(x: (bounds.width - iconSize) / 2,
-                                    y: (bounds.height - iconSize) / 2 + 10,
-                                    width: iconSize, height: iconSize)
-            addSubview(iconView)
+            let iv = NSImageView(image: app.icon ?? fallbackIcon())
+            iv.imageScaling = .scaleProportionallyUpOrDown
+            iv.frame = CGRect(x: (bounds.width - iconSize) / 2,
+                              y: (bounds.height - iconSize) / 2 + 10,
+                              width: iconSize, height: iconSize)
+            addSubview(iv)
 
             let label = NSTextField(labelWithString: app.name)
             label.font = .systemFont(ofSize: 10, weight: .medium)
@@ -798,19 +852,17 @@ final class LibrarySlotView: NSView {
             label.frame = CGRect(x: 4, y: 8, width: bounds.width - 8, height: 14)
             addSubview(label)
         } else {
-            // Empty state: large plus, no instructional text
             let plus = NSTextField(labelWithString: "+")
-            plus.font = .systemFont(ofSize: 28, weight: .ultraLight)
+            plus.font = .systemFont(ofSize: 26, weight: .ultraLight)
             plus.textColor = .quaternaryLabelColor
             plus.alignment = .center
-            plus.frame = CGRect(x: 0, y: (bounds.height - 36) / 2, width: bounds.width, height: 36)
+            plus.frame = CGRect(x: 0, y: (bounds.height - 34) / 2, width: bounds.width, height: 34)
             addSubview(plus)
         }
     }
 
-    private func defaultAppIcon() -> NSImage {
-        NSImage(systemSymbolName: "app.dashed", accessibilityDescription: nil)
-            ?? NSImage(size: NSSize(width: 40, height: 40))
+    private func fallbackIcon() -> NSImage {
+        NSImage(systemSymbolName: "app.dashed", accessibilityDescription: nil) ?? NSImage(size: NSSize(width: 40, height: 40))
     }
 
     // MARK: Drop destination
@@ -819,14 +871,13 @@ final class LibrarySlotView: NSView {
         guard sender.draggingPasteboard.string(forType: kLayoutAppPasteboardType) != nil else { return [] }
         isDropTarget = true
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.12
-            self.animator().layer?.borderColor = NSColor.controlAccentColor.cgColor
-            self.animator().layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.15).cgColor
+            ctx.duration = 0.1
+            self.animator().layer?.borderColor     = NSColor.controlAccentColor.cgColor
+            self.animator().layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.14).cgColor
         }
-        // Pulse scale up
         let pulse = CABasicAnimation(keyPath: "transform.scale")
-        pulse.fromValue = 1.0; pulse.toValue = 1.03
-        pulse.duration = 0.12; pulse.autoreverses = true; pulse.fillMode = .forwards
+        pulse.fromValue = 1.0; pulse.toValue = 1.04
+        pulse.duration  = 0.1; pulse.autoreverses = true
         layer?.add(pulse, forKey: "pulse")
         return .copy
     }
@@ -835,28 +886,26 @@ final class LibrarySlotView: NSView {
         isDropTarget = false
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.12
-            self.animator().layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.6).cgColor
+            self.animator().layer?.borderColor     = NSColor.separatorColor.withAlphaComponent(0.6).cgColor
             self.animator().layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.5).cgColor
         }
     }
 
     override func draggingEnded(_ sender: NSDraggingInfo) {
+        // Reset visual state regardless of whether the drop landed here or elsewhere
         isDropTarget = false
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.12
+            self.animator().layer?.borderColor     = NSColor.separatorColor.withAlphaComponent(0.6).cgColor
+            self.animator().layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.5).cgColor
+        }
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         guard let bid = sender.draggingPasteboard.string(forType: kLayoutAppPasteboardType) else { return false }
+        // Fire callback — controller calls assignApp(_:) back on this view
         onDrop(bid)
-        springAccept()
         return true
-    }
-
-    private func springAccept() {
-        let spring = CASpringAnimation(keyPath: "transform.scale")
-        spring.fromValue = 1.08; spring.toValue = 1.0
-        spring.mass = 1; spring.stiffness = 280; spring.damping = 20
-        spring.duration = spring.settlingDuration
-        layer?.add(spring, forKey: "spring")
     }
 }
 
@@ -895,39 +944,35 @@ final class LibraryAppDockView: NSView {
         searchField.action = #selector(searchChanged)
         addSubview(searchField)
 
-        let scrollW = bounds.width - 206
-        scrollView = NSScrollView(frame: CGRect(x: 4, y: 2, width: scrollW, height: bounds.height - 4))
+        scrollView = NSScrollView(frame: CGRect(x: 4, y: 2, width: bounds.width - 206, height: bounds.height - 4))
         scrollView.hasHorizontalScroller = false
-        scrollView.hasVerticalScroller = false
-        scrollView.drawsBackground = false
-        scrollView.autoresizingMask = [.width]
+        scrollView.hasVerticalScroller   = false
+        scrollView.drawsBackground       = false
+        scrollView.autoresizingMask      = [.width]
 
         stackView = NSStackView()
         stackView.orientation = .horizontal
-        stackView.spacing = 6
-        stackView.edgeInsets = NSEdgeInsets(top: 6, left: 8, bottom: 6, right: 8)
-        stackView.alignment = .centerY
+        stackView.spacing     = 6
+        stackView.edgeInsets  = NSEdgeInsets(top: 6, left: 8, bottom: 6, right: 8)
+        stackView.alignment   = .centerY
 
-        buildItems(apps.prefix(80))
-
+        rebuildItems(apps.prefix(80))
         scrollView.documentView = stackView
         addSubview(scrollView)
     }
 
-    private func buildItems(_ source: any Collection<AppInfo>) {
+    private func rebuildItems(_ source: any Collection<AppInfo>) {
         stackView.arrangedSubviews.forEach { $0.removeFromSuperview() }
         let items = Array(source)
-        for app in items {
-            stackView.addArrangedSubview(LibraryAppItemView(app: app))
-        }
-        let totalW = CGFloat(items.count) * 62 + 16
-        stackView.frame = CGRect(x: 0, y: 0, width: max(totalW, scrollView.bounds.width), height: bounds.height - 4)
+        for app in items { stackView.addArrangedSubview(LibraryAppItemView(app: app)) }
+        let w = max(CGFloat(items.count) * 64, scrollView.bounds.width)
+        stackView.frame = CGRect(x: 0, y: 0, width: w, height: bounds.height - 4)
     }
 
     @objc private func searchChanged() {
         let q = searchField.stringValue
         let filtered = q.isEmpty ? apps : apps.filter { $0.name.localizedCaseInsensitiveContains(q) }
-        buildItems(filtered.prefix(80))
+        rebuildItems(filtered.prefix(80))
     }
 }
 
@@ -935,7 +980,8 @@ final class LibraryAppDockView: NSView {
 
 final class LibraryAppItemView: NSView, NSDraggingSource {
     private let app: AppInfo
-    private var isHighlighted = false
+    private var mouseDownPoint: NSPoint = .zero   // tracked for reliable drag threshold
+    private var dragging = false
 
     init(app: AppInfo) {
         self.app = app
@@ -944,7 +990,7 @@ final class LibraryAppItemView: NSView, NSDraggingSource {
         layer?.cornerRadius = 8
         translatesAutoresizingMaskIntoConstraints = false
         widthAnchor.constraint(equalToConstant: 58).isActive = true
-        heightAnchor.constraint(equalToConstant: 80).isActive = true
+        heightAnchor.constraint(equalToConstant: bounds.height > 0 ? bounds.height : 80).isActive = true
         buildView()
     }
 
@@ -952,11 +998,10 @@ final class LibraryAppItemView: NSView, NSDraggingSource {
 
     private func buildView() {
         let iconSize: CGFloat = 38
-        let iconView = NSImageView(frame: CGRect(x: (58 - iconSize) / 2, y: 24, width: iconSize, height: iconSize))
-        iconView.image = app.icon
-        iconView.imageScaling = .scaleProportionallyUpOrDown
-        addSubview(iconView)
-
+        let iv = NSImageView(frame: CGRect(x: (58 - iconSize) / 2, y: 24, width: iconSize, height: iconSize))
+        iv.image = app.icon
+        iv.imageScaling = .scaleProportionallyUpOrDown
+        addSubview(iv)
         let label = NSTextField(labelWithString: app.name)
         label.font = .systemFont(ofSize: 9)
         label.textColor = .secondaryLabelColor
@@ -967,7 +1012,8 @@ final class LibraryAppItemView: NSView, NSDraggingSource {
     }
 
     override func mouseDown(with event: NSEvent) {
-        isHighlighted = true
+        mouseDownPoint = event.locationInWindow
+        dragging = false
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.08
             self.animator().layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.15).cgColor
@@ -975,14 +1021,19 @@ final class LibraryAppItemView: NSView, NSDraggingSource {
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard event.deltaX * event.deltaX + event.deltaY * event.deltaY > 4 else { return }
-        isHighlighted = false
+        guard !dragging else { return }
+        // Use displacement from mouseDown, not event.deltaX/Y (which is velocity)
+        let loc = event.locationInWindow
+        let dx = loc.x - mouseDownPoint.x
+        let dy = loc.y - mouseDownPoint.y
+        guard dx * dx + dy * dy > 16 else { return }  // 4pt threshold
+        dragging = true
         layer?.backgroundColor = nil
 
         let icon = app.icon ?? NSImage(size: NSSize(width: 38, height: 38))
         let dragImg = NSImage(size: NSSize(width: 40, height: 40))
         dragImg.lockFocus()
-        icon.draw(in: NSRect(origin: .zero, size: NSSize(width: 40, height: 40)))
+        icon.draw(in: NSRect(origin: .zero, size: dragImg.size))
         dragImg.unlockFocus()
 
         let pb = NSPasteboardItem()
@@ -995,7 +1046,7 @@ final class LibraryAppItemView: NSView, NSDraggingSource {
     }
 
     override func mouseUp(with event: NSEvent) {
-        isHighlighted = false
+        dragging = false
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.12
             self.animator().layer?.backgroundColor = NSColor.clear.cgColor
@@ -1003,7 +1054,7 @@ final class LibraryAppItemView: NSView, NSDraggingSource {
     }
 
     override func mouseEntered(with event: NSEvent) {
-        guard !isHighlighted else { return }
+        guard !dragging else { return }
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.1
             self.animator().layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.06).cgColor
@@ -1011,7 +1062,7 @@ final class LibraryAppItemView: NSView, NSDraggingSource {
     }
 
     override func mouseExited(with event: NSEvent) {
-        guard !isHighlighted else { return }
+        guard !dragging else { return }
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.1
             self.animator().layer?.backgroundColor = NSColor.clear.cgColor
@@ -1021,9 +1072,7 @@ final class LibraryAppItemView: NSView, NSDraggingSource {
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         trackingAreas.forEach { removeTrackingArea($0) }
-        addTrackingArea(NSTrackingArea(
-            rect: bounds, options: [.mouseEnteredAndExited, .activeAlways], owner: self, userInfo: nil
-        ))
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways], owner: self, userInfo: nil))
     }
 
     func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {

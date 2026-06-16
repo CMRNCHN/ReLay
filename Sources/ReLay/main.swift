@@ -155,6 +155,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "Shuffle Layout Windows", action: #selector(shuffleLayout), keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit ReLay", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        menu.delegate = self
         statusItem?.menu = menu
     }
 
@@ -180,6 +181,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func saveCurrentLayout() {
         LayoutLibraryController.shared.promptSaveCurrentFromMenu()
+    }
+
+    private static let recentItemTag = 42
+
+    @objc private func applyRecentLayout(_ sender: NSMenuItem) {
+        guard let templateID = sender.representedObject as? String else { return }
+        LayoutLibraryController.shared.quickApply(templateID: templateID, triggerWindow: getFrontmostWindow())
     }
 
     @objc private func toggleInterception() {
@@ -210,6 +218,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 extension AppDelegate: NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
+        // Remove stale recent-layout items from previous open
+        for item in menu.items.filter({ $0.tag == AppDelegate.recentItemTag }) {
+            menu.removeItem(item)
+        }
+
+        // Inject fresh recent layouts at the top (max 4, de-duped)
+        let recents = LayoutLibraryController.shared.recentMenuItems()
+        for (i, entry) in recents.enumerated() {
+            let item = NSMenuItem(title: entry.name,
+                                  action: #selector(applyRecentLayout(_:)),
+                                  keyEquivalent: "\(i + 1)")
+            item.keyEquivalentModifierMask = NSEvent.ModifierFlags([.command, .option])
+            item.tag = AppDelegate.recentItemTag
+            item.representedObject = entry.id
+            menu.insertItem(item, at: i)
+        }
+        if !recents.isEmpty {
+            let sep = NSMenuItem.separator()
+            sep.tag = AppDelegate.recentItemTag
+            menu.insertItem(sep, at: recents.count)
+        }
+
         menu.item(withTitle: "Undo Last Layout")?.isEnabled = SpatialTransitionEngine.shared.canUndo
         menu.item(withTitle: "Shuffle Layout Windows")?.isEnabled = SpatialTransitionEngine.shared.canShuffle
     }

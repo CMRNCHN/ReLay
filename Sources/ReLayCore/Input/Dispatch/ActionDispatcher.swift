@@ -38,7 +38,10 @@ final class ActionDispatcher: IntentDispatching {
 
         case .moveWorkspace(let delta):
             AppLogger.log("intent: moveWorkspace delta=\(delta)", subsystem: "input")
-            SpatialEngine.shared.moveWorkspace(delta: delta)
+            if !SpatialEngine.shared.hasActiveGestureSession {
+                SpatialEngine.shared.beginGestureSession()
+            }
+            SpatialEngine.shared.applyGestureDelta(delta)
             withFrontmostApp { bundleID in
                 let state = self.reconciler.snapshot()
                 SpatialMemoryEngine.shared.learn(

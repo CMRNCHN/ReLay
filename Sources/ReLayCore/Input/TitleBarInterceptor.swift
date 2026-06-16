@@ -276,7 +276,8 @@ public final class TitleBarInterceptor {
             if let nsEvent = NSEvent(cgEvent: event), nsEvent.clickCount == 2 {
                 let location = event.location
                 if let window = hitTestTitleBar(at: location) {
-                    delegate?.gestureDidDoubleTap(on: window)
+                    let sessionID = UUID().uuidString.prefix(8).lowercased()
+                    delegate?.gestureDidDoubleTap(on: window, sessionID: sessionID)
                     return nil // Swallow the double click to override macOS default behavior
                 }
             }
@@ -300,6 +301,8 @@ public final class TitleBarInterceptor {
             pendingGestureID = UUID()
 
             if let window = hitTestTitleBar(at: location) {
+                let sessionID = UUID().uuidString.prefix(8).lowercased()
+                self.activeSessionID = sessionID
                 isTrackingGesture = true
                 activeTargetWindow = window
                 let shiftHeld = NSEvent.modifierFlags.contains(.shift)
@@ -307,7 +310,7 @@ public final class TitleBarInterceptor {
                 delegate?.gestureDidBegin(on: window, at: location, fingerCount: lastKnownTouchCount, shiftHeld: shiftHeld, gestureID: pendingGestureID)
                 
                 // Swallow the event to prevent underlying scroll
-                return nil 
+                return nil
             } else {
                 AppLogger.log("scroll began outside title bar hit region", subsystem: "interceptor")
                 // 3-finger gestures trigger expose from anywhere on screen
@@ -341,7 +344,7 @@ public final class TitleBarInterceptor {
         }
 
         // Phase: Changed (Physical finger movement)
-        if phase == .changed && isTrackingGesture {
+        if phase == .changed && isTrackingGesture, let sessionID = activeSessionID {
             // Calculate velocity approximation (pixels per second based on standard 60hz scroll polling)
             let deltaX = nsEvent.scrollingDeltaX
             let deltaY = nsEvent.scrollingDeltaY
@@ -356,9 +359,9 @@ public final class TitleBarInterceptor {
         if (phase == .ended || phase == .cancelled || momentumPhase == .began) && isTrackingGesture {
             AppLogger.log("scroll gesture finished gesture=\(pendingGestureID.uuidString.prefix(8)) phase=\(phase.rawValue) momentum=\(momentumPhase.rawValue)", subsystem: "interceptor")
             if phase == .cancelled {
-                delegate?.gestureDidCancel()
+                delegate?.gestureDidCancel(sessionID: sessionID)
             } else {
-                delegate?.gestureDidEnd()
+                delegate?.gestureDidEnd(sessionID: sessionID)
             }
             resetState()
             return nil // Swallow final event

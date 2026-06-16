@@ -50,7 +50,7 @@ public final class GestureEngine: TitleBarInterceptorDelegate {
         SpatialTransitionEngine.shared.beginSession(window: window, fingerCount: fingerCount, at: location, gestureID: gestureID)
     }
 
-    public func gestureDidDoubleTap(on window: AXUIElement) {}
+    public func gestureDidDoubleTap(on window: AXUIElement, sessionID: String) {}
 
     public func killSwitchTriggered() {
         gestureDidCancel()
@@ -100,7 +100,8 @@ public final class GestureEngine: TitleBarInterceptorDelegate {
         SpatialTransitionEngine.shared.updatePreview(
             effectiveX: effectiveX,
             effectiveY: effectiveY,
-            progress:   progress
+            progress:   progress,
+            sessionID:  sessionID
         )
 
         if velocity > (thresholds["flickVelocity"] ?? 800.0) {
@@ -158,7 +159,7 @@ public final class GestureEngine: TitleBarInterceptorDelegate {
 
     // MARK: - Private
 
-    private func commit(effectiveX: CGFloat, effectiveY: CGFloat) {
+    private func commit(effectiveX: CGFloat, effectiveY: CGFloat, sessionID: String) {
         hasCommitted = true
         let direction = GestureDirection(effectiveX: effectiveX, effectiveY: effectiveY)
         AppLogger.log(
@@ -170,7 +171,8 @@ public final class GestureEngine: TitleBarInterceptorDelegate {
             effectiveX:  effectiveX,
             effectiveY:  effectiveY,
             fingerCount: currentFingerCount,
-            at:          startLocation
+            at:          startLocation,
+            sessionID:   sessionID
         )
     }
 

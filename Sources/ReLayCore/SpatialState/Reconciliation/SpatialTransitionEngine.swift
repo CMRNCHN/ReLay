@@ -60,23 +60,27 @@ public final class SpatialTransitionEngine {
                 currentState: inferred,
                 floatingFrame: inferred == .floating ? sessionStartFrame : nil
             )
-            store.setRecord(record, for: window)
+            store.setRecord(record, for: window, sessionID: sessionID)
         }
     }
 
     /// Called on every scroll delta while a gesture is in progress.
     /// `effectiveX/Y` are axis-locked (one is always 0).
     /// `progress` is in [0, 1] relative to the action threshold.
-    func updatePreview(effectiveX: CGFloat, effectiveY: CGFloat, progress: CGFloat) {
+    func updatePreview(effectiveX: CGFloat, effectiveY: CGFloat, progress: CGFloat, sessionID: String) {
         guard let window = sessionWindow, sessionFingerCount == 2 else {
-            PreviewManager.shared.dismiss(animated: false)
+            if let sid = activeSessionID {
+                PreviewManager.shared.dismiss(animated: false, sessionID: sid)
+            } else {
+                PreviewManager.shared.dismiss(animated: false, sessionID: sessionID)
+            }
             return
         }
         guard let direction = GestureDirection(effectiveX: effectiveX, effectiveY: effectiveY) else { return }
 
         let currentState = store.currentState(for: window) ?? .floating
         guard let nextState = graph.nextState(from: currentState, moving: direction) else {
-            PreviewManager.shared.dismiss(animated: false)
+            PreviewManager.shared.dismiss(animated: false, sessionID: sessionID)
             return
         }
 
@@ -84,7 +88,8 @@ public final class SpatialTransitionEngine {
         PreviewManager.shared.updateOverlay(
             currentFrame: sessionStartFrame,
             targetFrame:  targetFrame,
-            progress:     progress
+            progress:     progress,
+            sessionID:    sessionID
         )
     }
 
@@ -111,15 +116,15 @@ public final class SpatialTransitionEngine {
 
         if fingerCount >= 4 {
             if let dir = direction, dir == .up {
-                executeExitLayout(triggerWindow: window)
+                executeExitLayout(triggerWindow: window, sessionID: sessionID)
             } else {
-                executeStageManagerLayout(triggerWindow: window)
+                executeStageManagerLayout(triggerWindow: window, sessionID: sessionID)
             }
         } else if fingerCount == 3 {
             if let dir = direction, dir == .down {
                 executeLayoutExpose(triggerWindow: window)
             } else {
-                executeAutoLayout(triggerWindow: window)
+                executeAutoLayout(triggerWindow: window, sessionID: sessionID)
             }
         } else {
             guard let dir = direction else { cancelSession(); return }
@@ -134,15 +139,15 @@ public final class SpatialTransitionEngine {
         }
     }
 
-    func cancelSession() {
+    func cancelSession(sessionID: String) {
         defer { clearSession() }
         AppLogger.log("transition session cancelled gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "transition")
         guard let window = sessionWindow, !sessionStartFrame.isEmpty else {
-            PreviewManager.shared.dismiss(animated: true)
+            PreviewManager.shared.dismiss(animated: true, sessionID: sessionID)
             return
         }
-        animator.animateWindowFrame(window, to: sessionStartFrame, duration: 0.120)
-        PreviewManager.shared.dismiss(animated: true)
+        animator.animateWindowFrame(window, to: sessionStartFrame, duration: 0.120, sessionID: sessionID)
+        PreviewManager.shared.dismiss(animated: true, sessionID: sessionID)
     }
 
     // MARK: - Shift Live Resize
@@ -174,15 +179,15 @@ public final class SpatialTransitionEngine {
 
     // MARK: - 2-finger State Transition
 
-    private func executeStateTransition(direction: GestureDirection, for window: AXUIElement) {
+    private func executeStateTransition(direction: GestureDirection, for window: AXUIElement, sessionID: String) {
         guard var record = store.record(for: window) else { return }
         let currentState = record.currentState
 
         guard let nextState = graph.nextState(from: currentState, moving: direction) else {
             AppLogger.log("no transition available gesture=\(currentGestureID.uuidString.prefix(8)) from=\(currentState) direction=\(direction)", subsystem: "transition")
             // Edge of the graph — snap back
-            animator.animateWindowFrame(window, to: sessionStartFrame, duration: 0.120)
-            PreviewManager.shared.dismiss(animated: true)
+            animator.animateWindowFrame(window, to: sessionStartFrame, duration: 0.120, sessionID: sessionID)
+            PreviewManager.shared.dismiss(animated: true, sessionID: sessionID)
             return
         }
 
@@ -194,13 +199,13 @@ public final class SpatialTransitionEngine {
         }
 
         record.transition(to: nextState)
-        store.setRecord(record, for: window)
+        store.setRecord(record, for: window, sessionID: sessionID)
 
         AppLogger.log("layout resolution gesture=\(currentGestureID.uuidString.prefix(8)) state=\(nextState)", subsystem: "transition")
         let targetFrame = targetFrame(for: nextState, window: window, screen: sessionScreenFrame)
 
-        PreviewManager.shared.commitOverlay(finalFrame: targetFrame)
-        animator.animateWindowFrame(window, to: targetFrame)
+        PreviewManager.shared.commitOverlay(finalFrame: targetFrame, sessionID: sessionID)
+        animator.animateWindowFrame(window, to: targetFrame, sessionID: sessionID)
     }
 
     // MARK: - 2-finger Vertical Actions
@@ -325,18 +330,18 @@ public final class SpatialTransitionEngine {
         if var record = store.record(for: triggerWindow) {
             if record.floatingFrame == nil { record.floatingFrame = sessionStartFrame }
             record.transition(to: .fullscreen)
-            store.setRecord(record, for: triggerWindow)
+            store.setRecord(record, for: triggerWindow, sessionID: sessionID)
         }
 
-        PreviewManager.shared.commitOverlay(finalFrame: target)
-        animator.animateWindowFrame(triggerWindow, to: target)
+        PreviewManager.shared.commitOverlay(finalFrame: target, sessionID: sessionID)
+        animator.animateWindowFrame(triggerWindow, to: target, sessionID: sessionID)
     }
 
     private func executeThreeColumnLayout(triggerWindow: AXUIElement) {
         AppLogger.log("transition request three-column layout gesture=\(currentGestureID.uuidString.prefix(8))", subsystem: "transition")
         let screen = sessionScreenFrame != .zero ? sessionScreenFrame : animator.getUsableScreenFrame(for: triggerWindow)
         var windows = animator.getAllVisibleWindows()
-        guard windows.count >= 3 else { executeAutoLayout(triggerWindow: triggerWindow); return }
+        guard windows.count >= 3 else { executeAutoLayout(triggerWindow: triggerWindow, sessionID: sessionID); return }
 
         // Trigger window always takes column 0
         windows.removeAll { CFEqual($0, triggerWindow) }
@@ -350,8 +355,8 @@ public final class SpatialTransitionEngine {
         stageManagerWasEnabled = animator.isStageManagerEnabled()
         if stageManagerWasEnabled { animator.setStageManager(false) }
 
-        animator.tileWindows(selected, in: screen, columns: 3, gap: 2)
-        PreviewManager.shared.dismiss(animated: false)
+        animator.tileWindows(selected, in: screen, columns: 3, gap: 2, sessionID: sessionID)
+        PreviewManager.shared.dismiss(animated: false, sessionID: sessionID)
     }
 
     private func executeStageManagerLayout(triggerWindow: AXUIElement) {
@@ -367,8 +372,8 @@ public final class SpatialTransitionEngine {
         stageManagerWasEnabled = animator.isStageManagerEnabled()
         if stageManagerWasEnabled { animator.setStageManager(false) }
 
-        animator.tileWindows(windows, in: screen, columns: nil, gap: 2)
-        PreviewManager.shared.dismiss(animated: false)
+        animator.tileWindows(windows, in: screen, columns: nil, gap: 2, sessionID: sessionID)
+        PreviewManager.shared.dismiss(animated: false, sessionID: sessionID)
     }
 
     private func executeExitLayout(triggerWindow: AXUIElement) {
@@ -378,21 +383,21 @@ public final class SpatialTransitionEngine {
         if AXUIElementCopyAttributeValue(triggerWindow, "AXFullScreen" as CFString, &fsRef) == .success,
            let isFS = fsRef as? Bool, isFS {
             AXUIElementSetAttributeValue(triggerWindow, "AXFullScreen" as CFString, false as CFTypeRef)
-            store.updateState(.floating, for: triggerWindow)
+            store.updateState(.floating, for: triggerWindow, sessionID: sessionID)
             return
         }
 
         // Restore tiled layout
         if isInTiledMode {
             for entry in tiledEntries {
-                animator.animateWindowFrame(entry.window, to: entry.original)
+                animator.animateWindowFrame(entry.window, to: entry.original, sessionID: sessionID)
             }
             tiledEntries = []
             if stageManagerWasEnabled { animator.setStageManager(true) }
             stageManagerWasEnabled = false
         }
 
-        PreviewManager.shared.dismiss(animated: false)
+        PreviewManager.shared.dismiss(animated: false, sessionID: sessionID)
     }
 
     // MARK: - Helpers
@@ -419,5 +424,6 @@ public final class SpatialTransitionEngine {
         sessionStartFrame    = .zero
         sessionFingerCount   = 2
         sessionStartLocation = .zero
+        activeSessionID      = nil
     }
 }
