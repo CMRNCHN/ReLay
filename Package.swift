@@ -12,10 +12,6 @@ let package = Package(
         .executable(
             name: "ReLay",
             targets: ["ReLay"]
-        ),
-        .executable(
-            name: "ReLayMVP",
-            targets: ["ReLayMVP"]
         )
     ],
 
@@ -30,17 +26,6 @@ let package = Package(
         .target(
             name: "ReLayCore",
             path: "Sources/ReLayCore"
-        ),
-
-        .target(
-            name: "ReLayV2",
-            path: "Sources/ReLayV2"
-        ),
-
-        .executableTarget(
-            name: "ReLayMVP",
-            dependencies: ["ReLayV2"],
-            path: "Sources/ReLayMVP"
         ),
 
         .testTarget(
