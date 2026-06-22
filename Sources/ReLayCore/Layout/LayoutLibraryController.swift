@@ -49,7 +49,7 @@ public final class LayoutLibraryController: NSWindowController {
         currentWindows = makeWindowItems(triggerWindow: triggerWindow)
 
         // Spatial suggestion — picks best template, slots stay empty
-        let screen = WindowRuntime.usableScreen(containing: triggerWindow.flatMap { AXWindowOps.frame($0) } ?? .zero)
+        let screen = screenForWindow(triggerWindow)
         let suggestion = LayoutSuggestionEngine.rank(context: LayoutSuggestionEngine.Context(
             windows: currentWindows,
             activeWindow: currentWindows.first(where: { $0.isActive }),
@@ -92,19 +92,12 @@ public final class LayoutLibraryController: NSWindowController {
 
     /// Instantly tiles visible windows into the named template. Bypasses the Library UI.
     public func quickApply(templateID: String, triggerWindow: AXUIElement?) {
-        guard let template = LayoutTemplate.all.first(where: { $0.id == templateID }) else { return }
-        let screen = WindowRuntime.usableScreen(containing: triggerWindow.flatMap { AXWindowOps.frame($0) } ?? .zero)
+        guard let template = templateByID(templateID) else { return }
+        let screen = screenForWindow(triggerWindow)
         guard screen != .zero else { return }
 
         let windows = AXWindowOps.allVisible()
-        for (i, slot) in template.slots.enumerated() where i < windows.count {
-            AXWindowOps.setFrame(windows[i], CGRect(
-                x: screen.origin.x + slot.rect.origin.x * screen.width,
-                y: screen.origin.y + slot.rect.origin.y * screen.height,
-                width: slot.rect.width * screen.width,
-                height: slot.rect.height * screen.height
-            ))
-        }
+        applyFrames(template: template, windows: windows, screen: screen)
 
         history.recordApply(event: AppliedLayoutEvent(
             layoutTemplateID: templateID,
@@ -189,7 +182,7 @@ public final class LayoutLibraryController: NSWindowController {
         self.dockView = dock
 
         // Canvas — middle, fills remaining space
-        let template = LayoutTemplate.all.first(where: { $0.id == selectedTemplateID }) ?? LayoutTemplate.all[0]
+        let template = templateByID(selectedTemplateID) ?? LayoutTemplate.all[0]
         let canvasY = dockH
         let canvasH = h - stripH - 1 - dockH
         let canvas = LibraryCanvasView(
@@ -268,7 +261,7 @@ public final class LayoutLibraryController: NSWindowController {
     private func selectTemplate(_ id: String) {
         selectedTemplateID = id
         slotAssignments = [:]
-        guard let template = LayoutTemplate.all.first(where: { $0.id == id }) else { return }
+        guard let template = templateByID(id) else { return }
         canvasView?.switchTemplate(template)
         templateStrip?.setSelected(id)
     }
@@ -287,18 +280,13 @@ public final class LayoutLibraryController: NSWindowController {
     // MARK: - Apply
 
     private func applyLayout() {
-        guard let template = LayoutTemplate.all.first(where: { $0.id == selectedTemplateID }) else { return }
-        let screen = WindowRuntime.usableScreen(containing: triggerWindow.flatMap { AXWindowOps.frame($0) } ?? .zero)
+        guard let template = templateByID(selectedTemplateID) else { return }
+        let screen = screenForWindow(triggerWindow)
         guard screen != .zero else { dismiss(); return }
 
         for slot in template.slots {
             guard let bundleID = slotAssignments[slot.id], let win = axWindow(forBundleID: bundleID) else { continue }
-            AXWindowOps.setFrame(win, CGRect(
-                x: screen.origin.x + slot.rect.origin.x * screen.width,
-                y: screen.origin.y + slot.rect.origin.y * screen.height,
-                width: slot.rect.width * screen.width,
-                height: slot.rect.height * screen.height
-            ))
+            AXWindowOps.setFrame(win, frameForSlot(slot, in: screen))
         }
 
         history.recordApply(event: AppliedLayoutEvent(
@@ -318,7 +306,7 @@ public final class LayoutLibraryController: NSWindowController {
     // MARK: - Save
 
     private func promptSaveLayout() {
-        guard let template = LayoutTemplate.all.first(where: { $0.id == selectedTemplateID }),
+        guard let template = templateByID(selectedTemplateID),
               let w = window else { return }
         let alert = NSAlert()
         alert.messageText = "Save Layout"
@@ -343,7 +331,7 @@ public final class LayoutLibraryController: NSWindowController {
     private func applySavedLayout(_ layout: SavedLayout) {
         selectedTemplateID = layout.templateID
         slotAssignments = layout.slotBundleIDs
-        guard let template = LayoutTemplate.all.first(where: { $0.id == layout.templateID }) else { return }
+        guard let template = templateByID(layout.templateID) else { return }
         canvasView?.switchTemplate(template, assignments: slotAssignments)
         templateStrip?.setSelected(layout.templateID)
         history.touchSavedLayout(id: layout.id)
@@ -410,6 +398,29 @@ public final class LayoutLibraryController: NSWindowController {
             }
         }
         return items
+    }
+
+    private func templateByID(_ id: String) -> LayoutTemplate? {
+        LayoutTemplate.all.first(where: { $0.id == id })
+    }
+
+    private func screenForWindow(_ window: AXUIElement?) -> CGRect {
+        WindowRuntime.usableScreen(containing: window.flatMap { AXWindowOps.frame($0) } ?? .zero)
+    }
+
+    private func frameForSlot(_ slot: LayoutTemplate.Slot, in screen: CGRect) -> CGRect {
+        CGRect(
+            x: screen.origin.x + slot.rect.origin.x * screen.width,
+            y: screen.origin.y + slot.rect.origin.y * screen.height,
+            width: slot.rect.width * screen.width,
+            height: slot.rect.height * screen.height
+        )
+    }
+
+    private func applyFrames(template: LayoutTemplate, windows: [AXUIElement], screen: CGRect) {
+        for (i, slot) in template.slots.enumerated() where i < windows.count {
+            AXWindowOps.setFrame(windows[i], frameForSlot(slot, in: screen))
+        }
     }
 
 }
