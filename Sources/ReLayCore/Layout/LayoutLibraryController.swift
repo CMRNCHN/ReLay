@@ -10,9 +10,8 @@ private let kLayoutAppPasteboardType = NSPasteboard.PasteboardType("com.relay.la
 public final class LayoutLibraryController: NSWindowController {
     public static let shared = LayoutLibraryController()
 
-    private let orchestrator = LayoutOrchestrator.shared
-    private let history      = LayoutHistoryStore.shared
-    private let appLibrary   = AppLibraryStore.shared
+    private let history    = LayoutHistoryStore.shared
+    private let appLibrary = AppLibraryStore.shared
 
     public private(set) var isPresented: Bool = false
 
@@ -50,7 +49,7 @@ public final class LayoutLibraryController: NSWindowController {
         currentWindows = makeWindowItems(triggerWindow: triggerWindow)
 
         // Spatial suggestion — picks best template, slots stay empty
-        let screen = orchestrator.getUsableScreenFrame(for: triggerWindow ?? AXUIElementCreateSystemWide())
+        let screen = WindowRuntime.usableScreen(containing: triggerWindow.flatMap { AXWindowOps.frame($0) } ?? .zero)
         let suggestion = LayoutSuggestionEngine.rank(context: LayoutSuggestionEngine.Context(
             windows: currentWindows,
             activeWindow: currentWindows.first(where: { $0.isActive }),
@@ -94,17 +93,17 @@ public final class LayoutLibraryController: NSWindowController {
     /// Instantly tiles visible windows into the named template. Bypasses the Library UI.
     public func quickApply(templateID: String, triggerWindow: AXUIElement?) {
         guard let template = LayoutTemplate.all.first(where: { $0.id == templateID }) else { return }
-        let screen = orchestrator.getUsableScreenFrame(for: triggerWindow ?? AXUIElementCreateSystemWide())
+        let screen = WindowRuntime.usableScreen(containing: triggerWindow.flatMap { AXWindowOps.frame($0) } ?? .zero)
         guard screen != .zero else { return }
 
-        let windows = orchestrator.getAllVisibleWindows()
+        let windows = AXWindowOps.allVisible()
         for (i, slot) in template.slots.enumerated() where i < windows.count {
-            orchestrator.animateWindowFrame(windows[i], to: CGRect(
+            AXWindowOps.setFrame(windows[i], CGRect(
                 x: screen.origin.x + slot.rect.origin.x * screen.width,
                 y: screen.origin.y + slot.rect.origin.y * screen.height,
                 width: slot.rect.width * screen.width,
                 height: slot.rect.height * screen.height
-            ), source: "expose")
+            ))
         }
 
         history.recordApply(event: AppliedLayoutEvent(
@@ -289,17 +288,17 @@ public final class LayoutLibraryController: NSWindowController {
 
     private func applyLayout() {
         guard let template = LayoutTemplate.all.first(where: { $0.id == selectedTemplateID }) else { return }
-        let screen = orchestrator.getUsableScreenFrame(for: triggerWindow ?? AXUIElementCreateSystemWide())
+        let screen = WindowRuntime.usableScreen(containing: triggerWindow.flatMap { AXWindowOps.frame($0) } ?? .zero)
         guard screen != .zero else { dismiss(); return }
 
         for slot in template.slots {
             guard let bundleID = slotAssignments[slot.id], let win = axWindow(forBundleID: bundleID) else { continue }
-            orchestrator.animateWindowFrame(win, to: CGRect(
+            AXWindowOps.setFrame(win, CGRect(
                 x: screen.origin.x + slot.rect.origin.x * screen.width,
                 y: screen.origin.y + slot.rect.origin.y * screen.height,
                 width: slot.rect.width * screen.width,
                 height: slot.rect.height * screen.height
-            ), source: "expose")
+            ))
         }
 
         history.recordApply(event: AppliedLayoutEvent(
@@ -311,11 +310,7 @@ public final class LayoutLibraryController: NSWindowController {
             displayCount: NSScreen.screens.count
         ))
 
-        SpatialTransitionEngine.shared.registerExposeState(
-            template: template,
-            windows: orchestrator.getAllVisibleWindows(),
-            screenFrame: screen
-        )
+        AppLogger.log("layout applied template=\(template.id) windows=\(AXWindowOps.allVisible().count)", subsystem: "layout")
 
         dismiss()
     }
@@ -397,7 +392,7 @@ public final class LayoutLibraryController: NSWindowController {
                 var mv: CFTypeRef?
                 if AXUIElementCopyAttributeValue(win, kAXMinimizedAttribute as CFString, &mv) == .success,
                    (mv as? Bool) == true { continue }
-                let title = orchestrator.windowTitle(for: win)
+                let title = AXWindowOps.title(win)
                 let role  = WindowRoleClassifier.classify(appName: app.localizedName, windowTitle: title)
                 var isActive = false
                 if let tw = triggerWindow {
@@ -416,6 +411,7 @@ public final class LayoutLibraryController: NSWindowController {
         }
         return items
     }
+
 }
 
 // MARK: - LayoutTemplateStrip

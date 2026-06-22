@@ -48,7 +48,7 @@ private struct TransitionKey: Hashable {
 
 /// Declarative lookup table: (WindowLayoutState × GestureDirection) → WindowLayoutState.
 /// All entries cover 2-finger gestures only. Multi-finger operations are
-/// handled as special cases in SpatialTransitionEngine.
+/// handled as special cases in the reducer.
 class LayoutTransitionGraph {
 
     private var table: [TransitionKey: WindowLayoutState] = [:]
@@ -86,7 +86,6 @@ class LayoutTransitionGraph {
         add(.rightTopSixth,   .left,  .leftTopSixth)
         add(.rightBottomSixth,.left,  .leftBottomSixth)
 
-        // Vertical gestures (up/down) are handled as direct actions in
-        // SpatialTransitionEngine, not as graph transitions.
+        // Vertical gestures (up/down) are resolved directly in the reducer.
     }
 }

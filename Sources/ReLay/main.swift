@@ -15,8 +15,7 @@ if runningApps.count > 1 {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private let gestureEngine = GestureEngine()
-    private let titleBarInterceptor = TitleBarInterceptor()
+    private let runtime = WindowRuntime()
     private var statusItem: NSStatusItem?
     private var isInterceptionDisabled = false
     private var settingsWindowController: SettingsWindowController?
@@ -24,20 +23,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppLogger.log("application did finish launching", subsystem: "startup")
 
-        _ = SpatialTransitionEngine.shared
-        _ = WindowStateStore.shared
-        _ = SpatialStateCore.shared
-
         setupMenuBar()
-        titleBarInterceptor.delegate = gestureEngine
-
         checkAccessibilityAndStart()
         checkConflicts()
 
         NotificationCenter.default.addObserver(self, selector: #selector(toggleInterception), name: NSNotification.Name("ReLayEmergencyStop"), object: nil)
         NotificationCenter.default.addObserver(forName: NSNotification.Name("ReLayInterceptionToggled"), object: nil, queue: .main) { [weak self] note in
             let enabled = note.userInfo?["enabled"] as? Bool ?? true
-            if enabled { self?.startInterceptor() } else { self?.titleBarInterceptor.stop() }
+            if enabled { self?.startRuntime() } else { self?.runtime.stop() }
             self?.updateMenuBarIcon(permitted: true)
         }
 
@@ -46,20 +39,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func checkAccessibilityAndStart() {
         if AccessibilityBootstrap.isGranted() {
-            startInterceptor()
+            startRuntime()
             updateMenuBarIcon(permitted: true)
         } else {
             showAccessibilityPrompt()
         }
     }
 
-    private func startInterceptor() {
+    private func startRuntime() {
         do {
-            AppLogger.log("starting title bar interceptor", subsystem: "startup")
-            try titleBarInterceptor.start()
-            AppLogger.log("title bar interceptor started", subsystem: "startup")
+            AppLogger.log("starting window runtime", subsystem: "startup")
+            try self.runtime.start()
+            AppLogger.log("window runtime started", subsystem: "startup")
         } catch {
-            AppLogger.log("failed to start title bar interceptor: \(error)", subsystem: "startup")
+            AppLogger.log("failed to start window runtime: \(error)", subsystem: "startup")
         }
     }
 
@@ -100,7 +93,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             openAccessibilitySettings()
             // Start polling — will auto-start the interceptor the moment permission is granted
             AccessibilityBootstrap.startPolling { [weak self] in
-                self?.startInterceptor()
+                self?.startRuntime()
                 self?.updateMenuBarIcon(permitted: true)
                 self?.showGrantedNotification()
             }
@@ -135,7 +128,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         AppLogger.log("application will terminate", subsystem: "startup")
-        titleBarInterceptor.stop()
+        self.runtime.stop()
     }
 
     private func setupMenuBar() {
@@ -172,11 +165,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func undoLayout() {
-        SpatialTransitionEngine.shared.performExposeUndo()
+        AppLogger.log("undo layout requested", subsystem: "ui")
     }
 
     @objc private func shuffleLayout() {
-        SpatialTransitionEngine.shared.shuffleExposeLayout()
+        AppLogger.log("shuffle layout requested", subsystem: "ui")
     }
 
     @objc private func saveCurrentLayout() {
@@ -193,10 +186,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func toggleInterception() {
         isInterceptionDisabled.toggle()
         if isInterceptionDisabled {
-            titleBarInterceptor.stop()
+            self.runtime.stop()
             AppLogger.log("interception disabled via kill-switch", subsystem: "startup")
         } else {
-            startInterceptor()
+            startRuntime()
             AppLogger.log("interception re-enabled", subsystem: "startup")
         }
     }
@@ -240,8 +233,8 @@ extension AppDelegate: NSMenuDelegate {
             menu.insertItem(sep, at: recents.count)
         }
 
-        menu.item(withTitle: "Undo Last Layout")?.isEnabled = SpatialTransitionEngine.shared.canUndo
-        menu.item(withTitle: "Shuffle Layout Windows")?.isEnabled = SpatialTransitionEngine.shared.canShuffle
+        menu.item(withTitle: "Undo Last Layout")?.isEnabled = false
+        menu.item(withTitle: "Shuffle Layout Windows")?.isEnabled = false
     }
 }
 
