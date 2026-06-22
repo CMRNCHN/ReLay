@@ -26,7 +26,16 @@ __pycache__/
 .pytest_cache/
 
 # AI session artifacts
+.air/
 .ai_sessions/
+
+# Development scaffolding (analysis, logs, tools)
+before.txt
+imports.txt
+install.sh
+repomix-output.xml
+tools/
+iTerm2
 
 # Storage (generated at runtime — never commit)
 storage/debug-recordings/
