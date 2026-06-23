@@ -2,11 +2,11 @@ import Cocoa
 import ApplicationServices
 import Accessibility
 
-// MARK: - AXWindowOps
+// MARK: - System_AXWindowOps
 // Raw AX read/write primitives only.
 // No system queries (NSScreen). No UI logic. No animation. No decisions.
 
-enum AXWindowOps {
+enum System_AXWindowOps {
 
     // MARK: - Read
 

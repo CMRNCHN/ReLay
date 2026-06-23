@@ -23,7 +23,7 @@ enum WindowMutabilityDecision {
 // entries populated from AXTest survey output only — never guessed.
 // Default: deny-by-absence. Unknown apps never move.
 
-enum WindowMutabilityPolicy {
+enum Policy_WindowMutabilityPolicy {
 
     static let defaultDecision: WindowMutabilityDecision = .skipWindow
 

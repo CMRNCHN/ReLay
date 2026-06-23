@@ -15,7 +15,7 @@ if runningApps.count > 1 {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private let runtime = WindowRuntime()
+    private let runtime = Runtime_WindowRuntime()
     private var statusItem: NSStatusItem?
     private var isInterceptionDisabled = false
     private var settingsWindowController: SettingsWindowController?

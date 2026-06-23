@@ -96,7 +96,7 @@ public final class LayoutLibrary: NSWindowController {
         let screen = screenForWindow(triggerWindow)
         guard screen != .zero else { return }
 
-        let windows = AXWindowOps.allVisible()
+        let windows = System_AXWindowOps.allVisible()
         applyFrames(template: template, windows: windows, screen: screen)
 
         history.recordApply(event: AppliedLayoutEvent(
@@ -286,7 +286,7 @@ public final class LayoutLibrary: NSWindowController {
 
         for slot in template.slots {
             guard let bundleID = slotAssignments[slot.id], let win = axWindow(forBundleID: bundleID) else { continue }
-            AXWindowOps.setFrame(win, frameForSlot(slot, in: screen))
+            System_AXWindowOps.setFrame(win, frameForSlot(slot, in: screen))
         }
 
         history.recordApply(event: AppliedLayoutEvent(
@@ -298,7 +298,7 @@ public final class LayoutLibrary: NSWindowController {
             displayCount: NSScreen.screens.count
         ))
 
-        Logger.log("layout applied template=\(template.id) windows=\(AXWindowOps.allVisible().count)", subsystem: "layout")
+        Logger.log("layout applied template=\(template.id) windows=\(System_AXWindowOps.allVisible().count)", subsystem: "layout")
 
         dismiss()
     }
@@ -380,7 +380,7 @@ public final class LayoutLibrary: NSWindowController {
                 var mv: CFTypeRef?
                 if AXUIElementCopyAttributeValue(win, kAXMinimizedAttribute as CFString, &mv) == .success,
                    (mv as? Bool) == true { continue }
-                let title = AXWindowOps.title(win)
+                let title = System_AXWindowOps.title(win)
                 let role  = WindowRoleClassifier.classify(appName: app.localizedName, windowTitle: title)
                 var isActive = false
                 if let tw = triggerWindow {
@@ -405,7 +405,7 @@ public final class LayoutLibrary: NSWindowController {
     }
 
     private func screenForWindow(_ window: AXUIElement?) -> CGRect {
-        WindowRuntime.usableScreen(containing: window.flatMap { AXWindowOps.frame($0) } ?? .zero)
+        Runtime_WindowRuntime.usableScreen(containing: window.flatMap { System_AXWindowOps.frame($0) } ?? .zero)
     }
 
     private func frameForSlot(_ slot: LayoutTemplate.Slot, in screen: CGRect) -> CGRect {
@@ -419,7 +419,7 @@ public final class LayoutLibrary: NSWindowController {
 
     private func applyFrames(template: LayoutTemplate, windows: [AXUIElement], screen: CGRect) {
         for (i, slot) in template.slots.enumerated() where i < windows.count {
-            AXWindowOps.setFrame(windows[i], frameForSlot(slot, in: screen))
+            System_AXWindowOps.setFrame(windows[i], frameForSlot(slot, in: screen))
         }
     }
 

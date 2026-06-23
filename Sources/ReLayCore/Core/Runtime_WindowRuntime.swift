@@ -5,7 +5,7 @@ import ApplicationServices
 // Orchestrator: receive intent → resolve window → ask policy → call AX.
 // No AX logic. No heuristics. No persistence. No singleton.
 
-public final class WindowRuntime: EventTapCaptureDelegate {
+public final class Runtime_WindowRuntime: EventTapCaptureDelegate {
 
     private let capture: EventTapCapture
     private var state:          State  = State()
@@ -28,11 +28,11 @@ public final class WindowRuntime: EventTapCaptureDelegate {
     // MARK: - Capture → Reduce → Policy → Execute
 
     func didReceive(_ intent: WindowIntent) {
-        let window: AXUIElement? = (intent.phase == .began) ? AXWindowOps.frontmost() : state.activeWindow
+        let window: AXUIElement? = (intent.phase == .began) ? System_AXWindowOps.frontmost() : state.activeWindow
         if intent.phase == .began {
             activeBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""
         }
-        let screen = window.flatMap { AXWindowOps.frame($0) }.map { Self.usableScreen(containing: $0) } ?? .zero
+        let screen = window.flatMap { System_AXWindowOps.frame($0) }.map { Self.usableScreen(containing: $0) } ?? .zero
         let input  = Input(dx: intent.dx, dy: intent.dy,
                            phase: intent.phase, window: window, screenFrame: screen)
         let prev = state
@@ -51,26 +51,26 @@ public final class WindowRuntime: EventTapCaptureDelegate {
         Logger.log("apply: committed=\(curr.hasCommitted) progress=\(curr.progress) bundleID=\(activeBundleID)", subsystem: "runtime")
 
         if prev.activeWindow == nil && curr.activeWindow != nil {
-            state.startFrame = AXWindowOps.frame(window) ?? .zero
+            state.startFrame = System_AXWindowOps.frame(window) ?? .zero
             Logger.log("apply: captured startFrame=\(state.startFrame)", subsystem: "runtime")
         }
 
         if curr.hasCommitted && !prev.hasCommitted {
             Logger.log("apply: COMMIT transition, targetFrame=\(curr.targetFrame)", subsystem: "runtime")
             commitPreview(to: curr.targetFrame)
-            let policy = WindowMutabilityPolicy.decision(for: activeBundleID)
+            let policy = Policy_WindowMutabilityPolicy.decision(for: activeBundleID)
             Logger.log("apply: policy decision=\(policy) for \(activeBundleID)", subsystem: "runtime")
             if policy == .allow {
                 Logger.log("apply: calling setFrame with \(curr.targetFrame)", subsystem: "runtime")
-                AXWindowOps.setFrame(window, curr.targetFrame)
+                System_AXWindowOps.setFrame(window, curr.targetFrame)
             } else {
                 Logger.log("apply: policy blocked frame move", subsystem: "runtime")
             }
         } else if !curr.hasCommitted && curr.progress == 0
                     && (prev.accumulatedX != 0 || prev.accumulatedY != 0) {
             Logger.log("apply: CANCEL, resetting to startFrame=\(state.startFrame)", subsystem: "runtime")
-            if !state.startFrame.isEmpty && WindowMutabilityPolicy.decision(for: activeBundleID) == .allow {
-                AXWindowOps.setFrame(window, state.startFrame)
+            if !state.startFrame.isEmpty && Policy_WindowMutabilityPolicy.decision(for: activeBundleID) == .allow {
+                System_AXWindowOps.setFrame(window, state.startFrame)
             }
             dismissPreview(animated: true)
         } else if curr.progress > 0 {
@@ -169,7 +169,7 @@ public final class WindowRuntime: EventTapCaptureDelegate {
 private extension CGRect {
     var area: CGFloat { width * height }
 }
-// NOTE: WindowLayoutState merged into WindowRuntime
+// NOTE: WindowLayoutState merged into Runtime_WindowRuntime
 import CoreGraphics
 
 // MARK: - Gesture Direction
