@@ -153,7 +153,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openExpose() {
-        LayoutLibraryController.shared.present(triggerWindow: getFrontmostWindow())
+        LayoutService.shared.present(triggerWindow: getFrontmostWindow())
     }
 
     @objc private func openPreferences() {
@@ -173,14 +173,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func saveCurrentLayout() {
-        LayoutLibraryController.shared.promptSaveCurrentFromMenu()
+        LayoutService.shared.promptSaveCurrentFromMenu()
     }
 
     private static let recentItemTag = 42
 
     @objc private func applyRecentLayout(_ sender: NSMenuItem) {
         guard let templateID = sender.representedObject as? String else { return }
-        LayoutLibraryController.shared.quickApply(templateID: templateID, triggerWindow: getFrontmostWindow())
+        LayoutService.shared.quickApply(templateID: templateID, triggerWindow: getFrontmostWindow())
     }
 
     @objc private func toggleInterception() {
@@ -217,7 +217,7 @@ extension AppDelegate: NSMenuDelegate {
         }
 
         // Inject fresh recent layouts at the top (max 4, de-duped)
-        let recents = LayoutLibraryController.shared.recentMenuItems()
+        let recents = LayoutService.shared.recentMenuItems()
         for (i, entry) in recents.enumerated() {
             let item = NSMenuItem(title: entry.name,
                                   action: #selector(applyRecentLayout(_:)),

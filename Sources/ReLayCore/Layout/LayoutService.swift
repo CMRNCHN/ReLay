@@ -5,10 +5,10 @@ import ApplicationServices
 
 private let kLayoutAppPasteboardType = NSPasteboard.PasteboardType("com.relay.layoutapp")
 
-// MARK: - LayoutLibraryController
+// MARK: - LayoutService
 
-public final class LayoutLibraryController: NSWindowController {
-    public static let shared = LayoutLibraryController()
+public final class LayoutService: NSWindowController {
+    public static let shared = LayoutService()
 
     private let history    = LayoutHistoryStore.shared
     private let appLibrary = AppLibraryStore.shared

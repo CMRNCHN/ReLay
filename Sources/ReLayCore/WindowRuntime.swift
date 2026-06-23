@@ -80,7 +80,7 @@ public final class WindowRuntime: EventTapCaptureDelegate {
     }
 
     // MARK: - Screen resolution (NSScreen — not AX)
-    // Static so LayoutLibraryController can call the single canonical implementation.
+    // Static so LayoutService can call the single canonical implementation.
 
     static func usableScreen(containing frame: CGRect) -> CGRect {
         guard let primary = NSScreen.screens.first else { return .zero }
