@@ -1,108 +1,91 @@
-# ReLay Architecture Freeze Rules (v1)
+# ReLay Architecture Design Contract (v1)
 
-**Status**: FROZEN. Structural changes require explicit justification.
+**Status**: Stable. Structural changes require justification via ADR (Architectural Decision Record).
+
+Architecture should enable evolution, not prevent it. These rules distinguish between hard constraints (immovable) and guidelines (defaults with justification).
 
 ---
 
-## 1. Domain Integrity (Hard Rule)
+## Hard Constraints (Cannot Be Overridden)
 
-There are exactly **3 domains only**:
+### 1. Domain Boundary (Inviolate)
+
+There are exactly **3 domains**:
 
 - **Core** → system + runtime primitives
 - **InputPipeline** → event ingestion + normalization  
 - **Layout** → layout logic + decisioning
 
-### ❌ Forbidden:
-- Adding new top-level folders under `ReLayCore/`
-- Creating "cross-cutting" domains (e.g., Shared, Common, Services)
+Adding a 4th domain requires an ADR explaining why existing domains are insufficient.
+
+### 2. Single Domain Ownership
+
+Every file has **one primary domain**. No duplicates, no "shared" copies.
+
+### 3. No Compatibility Layers
+
+Don't introduce forwarding files or compatibility shims without a documented migration plan.
+
+### 4. No Single-File Subdirectories
+
+A directory exists only if it contains ≥3 related files or represents a true subsystem (Core/Input/Layout).
 
 ---
 
-## 2. File Placement Rule (Strict)
+## Guidelines (Defaults with Justification)
 
-A file must live where its **primary responsibility executes**, not where it is used.
+### 5. Prefer Responsibility-Based Placement
 
-### Examples:
-- Window state logic → Core
-- Event capture → InputPipeline
-- Layout decisions → Layout
+Files live where their **primary responsibility executes**, not where they're used.
 
-### ❌ Forbidden:
-- Duplicating files across domains
-- "Helper" folders inside domains unless they contain ≥3 files
+**Rationale**: Makes code location predictable and reduces navigation overhead.
 
----
+**Override when**: A file logically belongs in multiple domains. Document the reasoning in comments.
 
-## 3. Naming Rule (Minimal Constraint)
+### 6. Avoid Abstraction Inflation
 
-- Names must describe **what it is**, not architecture role
-- No structural prefixes (no `System_`, `Runtime_`, `Policy_`)
-
-### ❌ Forbidden:
-- Encoding architecture in filenames
-- Renaming unless responsibility changes
-
----
-
-## 4. No Abstraction Inflation
-
-### ❌ Do not introduce:
+Default to simple names. Avoid:
 - Manager
 - Coordinator
 - Engine
 - Service (as a default pattern)
 - Provider
-- Handler layers unless strictly necessary
+- Handler layers
 
-**If a file does multiple roles** → split by responsibility, not abstraction naming.
+**Rationale**: Vague names hide responsibility and accumulate over time.
 
----
+**Override when**: The name accurately describes the type (e.g., `GestureInterpreter` if it truly interprets gestures).
 
-## 5. Directory Rule (Anti-Over-Nesting)
+### 7. Avoid Structural Refactors Without Purpose
 
-A directory is valid only if:
+Refactors should improve **correctness**, **maintainability**, or **reduce duplication**.
 
-- It contains ≥3 related files, **OR**
-- It represents a true subsystem boundary (Core/Input/Layout only)
+**Rationale**: Prevents churn and keeps architecture stable.
 
-### ❌ Forbidden:
-- Single-file folders
-- Deep nesting beyond 2 levels inside domains
+**Override when**: A new feature requires it, or a genuine problem emerges. Document in the commit or ADR.
 
 ---
 
-## 6. Refactor Rule (Hard Gate)
+## Architectural Decision Record (ADR) Requirement
 
-Refactoring is allowed **only** if it:
+**Any structural change beyond minor file edits requires an ADR:**
 
-- Reduces duplication, **OR**
-- Fixes incorrect responsibility placement
+- Adding a new top-level folder
+- Splitting or merging domains
+- Moving files between domains
+- Introducing new abstraction layers
 
-### ❌ Not allowed:
-- "Clarity refactors" that only rename or reshuffle
-- Structural optimization without functional change
+**ADR format** (keep brief, ~100 words):
+1. **Problem**: Why is the current structure insufficient?
+2. **Alternatives**: What other approaches were considered?
+3. **Decision**: What are we doing and why?
+4. **Consequences**: What becomes easier/harder?
 
----
-
-## 7. Stability Rule (Critical)
-
-**Once committed: No structural changes unless a new domain emerges.**
-
-A "new domain" means:
-
-- It has independent lifecycle
-- It contains ≥3 stable files
-- It is not derivable from existing domains
+File as `docs/adr/NNNN-<title>.md` or add to this document as a section.
 
 ---
 
-## Enforcement Mindset
-
-**Structure must become harder to change over time, not easier to rearrange.**
-
----
-
-## Current State (Frozen)
+## Current State (Stable)
 
 ```
 ReLayCore/
@@ -144,16 +127,27 @@ ReLayCore/
 
 ## Decision Gate for Future Changes
 
-**Before making any structural change, ask:**
+**Before making any structural change:**
 
-1. Does this violate rule 1-7?
-2. If yes → reject the change
-3. If no → does it add a new domain?
-4. If yes → justify why it's independent and necessary
-5. If no → proceed as a file-level change (allowed)
+1. **Is it a hard constraint violation?** (domains, ownership, compatibility layers, single-file dirs)
+   - If yes → needs ADR or architectural review
+2. **Is it a guideline override?** (placement, naming, refactor purpose)
+   - If yes → document justification in commit message
+3. **Is it a file-level change?** (new file in existing domain, internal refactor)
+   - If yes → proceed normally
+4. **When in doubt**: Write a brief ADR explaining the problem and why the change is necessary
+
+---
+
+## Success Metric
+
+**Architecture is working when your commit history is dominated by feature work and bug fixes, not directory shuffles and renames.**
+
+If six months from now this file hasn't needed updates, that's a sign the structure is doing its job.
 
 ---
 
 **Last updated**: 2026-06-23  
-**Frozen by**: Architecture review  
-**Next review**: Only if a new domain becomes necessary
+**Status**: Living design contract (not immutable law)  
+**Hard constraints**: Cannot be overridden without review  
+**Guidelines**: Defaults that can be justified when necessary
