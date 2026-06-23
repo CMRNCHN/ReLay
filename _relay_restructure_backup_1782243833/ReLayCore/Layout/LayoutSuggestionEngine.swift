@@ -28,12 +28,12 @@ struct LayoutSuggestionEngine {
             if !flaggedItems.isEmpty {
                 let ids = Set(flaggedItems.map { $0.id })
                 if !ids.contains(explicit.id) {
-                    Logger.log(
+                    AppLogger.log(
                         "STRICT: activeWindow identity mismatch — explicit=\(explicit.id) flagged=\(ids.sorted().joined(separator: ","))",
                         subsystem: "suggestion"
                     )
                     for w in context.windows {
-                        Logger.log(
+                        AppLogger.log(
                             "STRICT: window id=\(w.id) role=\(w.role) isActive=\(w.isActive)",
                             subsystem: "suggestion"
                         )

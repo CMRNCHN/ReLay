@@ -2,14 +2,14 @@ import Foundation
 import AppKit
 import ReLayCore
 
-Logger.log("bootstrapping runtime", subsystem: "startup")
-Logger.setupCrashHandling()
+AppLogger.log("bootstrapping runtime", subsystem: "startup")
+CrashLogger.setup()
 
 // Single instance enforcement
 let bundleIdentifier = Bundle.main.bundleIdentifier ?? "com.relay.app"
 let runningApps = NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier == bundleIdentifier }
 if runningApps.count > 1 {
-    Logger.log("another instance of ReLay is already running, terminating", subsystem: "startup")
+    AppLogger.log("another instance of ReLay is already running, terminating", subsystem: "startup")
     // Try to activate the other one? No, just quit.
     exit(0)
 }
@@ -21,7 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsWindowController: SettingsWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        Logger.log("application did finish launching", subsystem: "startup")
+        AppLogger.log("application did finish launching", subsystem: "startup")
 
         setupMenuBar()
         checkAccessibilityAndStart()
@@ -34,7 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.updateMenuBarIcon(permitted: true)
         }
 
-        Logger.log("runtime active", subsystem: "startup")
+        AppLogger.log("runtime active", subsystem: "startup")
     }
 
     private func checkAccessibilityAndStart() {
@@ -48,11 +48,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func startRuntime() {
         do {
-            Logger.log("starting window runtime", subsystem: "startup")
+            AppLogger.log("starting window runtime", subsystem: "startup")
             try self.runtime.start()
-            Logger.log("window runtime started", subsystem: "startup")
+            AppLogger.log("window runtime started", subsystem: "startup")
         } catch {
-            Logger.log("failed to start window runtime: \(error)", subsystem: "startup")
+            AppLogger.log("failed to start window runtime: \(error)", subsystem: "startup")
         }
     }
 
@@ -127,7 +127,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        Logger.log("application will terminate", subsystem: "startup")
+        AppLogger.log("application will terminate", subsystem: "startup")
         self.runtime.stop()
     }
 
@@ -165,11 +165,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func undoLayout() {
-        Logger.log("undo layout requested", subsystem: "ui")
+        AppLogger.log("undo layout requested", subsystem: "ui")
     }
 
     @objc private func shuffleLayout() {
-        Logger.log("shuffle layout requested", subsystem: "ui")
+        AppLogger.log("shuffle layout requested", subsystem: "ui")
     }
 
     @objc private func saveCurrentLayout() {
@@ -187,10 +187,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         isInterceptionDisabled.toggle()
         if isInterceptionDisabled {
             self.runtime.stop()
-            Logger.log("interception disabled via kill-switch", subsystem: "startup")
+            AppLogger.log("interception disabled via kill-switch", subsystem: "startup")
         } else {
             startRuntime()
-            Logger.log("interception re-enabled", subsystem: "startup")
+            AppLogger.log("interception re-enabled", subsystem: "startup")
         }
     }
 
@@ -244,6 +244,6 @@ let delegate = AppDelegate()
 app.delegate = delegate
 app.setActivationPolicy(.accessory)
 
-Logger.log("starting application loop", subsystem: "startup")
+AppLogger.log("starting application loop", subsystem: "startup")
 
 app.run()

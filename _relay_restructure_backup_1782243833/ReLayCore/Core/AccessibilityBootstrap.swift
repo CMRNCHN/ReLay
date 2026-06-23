@@ -39,13 +39,13 @@ public enum AccessibilityBootstrap {
         timer.setEventHandler {
             if AXIsProcessTrusted() {
                 stopPolling()
-                Logger.log("accessibility permission granted — starting interceptor", subsystem: "startup")
+                AppLogger.log("accessibility permission granted — starting interceptor", subsystem: "startup")
                 onGranted()
             }
         }
         timer.resume()
         pollingTimer = timer
-        Logger.log("polling for accessibility permission…", subsystem: "startup")
+        AppLogger.log("polling for accessibility permission…", subsystem: "startup")
     }
 
     public static func stopPolling() {

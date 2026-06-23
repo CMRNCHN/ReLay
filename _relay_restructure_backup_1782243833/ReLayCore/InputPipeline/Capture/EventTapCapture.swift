@@ -117,19 +117,29 @@ final class EventTapCapture {
     // MARK: - Event handling
 
     private func handleCGEvent(type: CGEventType, event: CGEvent) {
+        AppLogger.log("input capture: event received type=\(type)", subsystem: "input")
+
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             AppLogger.log("input capture: tap disabled (\(type == .tapDisabledByTimeout ? "timeout" : "user input")); re-enabling", subsystem: "input")
             if let tap = eventTap { CGEvent.tapEnable(tap: tap, enable: true) }
             return
         }
 
-        guard let nsEvent = NSEvent(cgEvent: event),
-              let phase   = nsEvent.phase.asWindowIntentPhase else { return }
+        guard let nsEvent = NSEvent(cgEvent: event) else {
+            AppLogger.log("input capture: failed to convert CGEvent to NSEvent", subsystem: "input")
+            return
+        }
+
+        guard let phase = nsEvent.phase.asWindowIntentPhase else {
+            AppLogger.log("input capture: phase conversion failed for phase=\(nsEvent.phase) type=\(type)", subsystem: "input")
+            return
+        }
 
         // Suppress inertia (momentum) events — false swipe classifications.
         let momentum = nsEvent.momentumPhase
         if momentum == .began || momentum == .changed || momentum == .ended { return }
 
+        AppLogger.log("input capture: intent dx=\(nsEvent.scrollingDeltaX) dy=\(nsEvent.scrollingDeltaY) phase=\(phase)", subsystem: "input")
         delegate?.didReceive(WindowIntent(
             dx: CGFloat(nsEvent.scrollingDeltaX),
             dy: CGFloat(nsEvent.scrollingDeltaY),

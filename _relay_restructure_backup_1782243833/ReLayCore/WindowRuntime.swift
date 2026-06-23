@@ -44,37 +44,37 @@ public final class WindowRuntime: EventTapCaptureDelegate {
 
     private func apply(prev: State, curr: State) {
         guard let window = curr.activeWindow else {
-            Logger.log("apply: no active window", subsystem: "runtime")
+            AppLogger.log("apply: no active window", subsystem: "runtime")
             return
         }
 
-        Logger.log("apply: committed=\(curr.hasCommitted) progress=\(curr.progress) bundleID=\(activeBundleID)", subsystem: "runtime")
+        AppLogger.log("apply: committed=\(curr.hasCommitted) progress=\(curr.progress) bundleID=\(activeBundleID)", subsystem: "runtime")
 
         if prev.activeWindow == nil && curr.activeWindow != nil {
             state.startFrame = AXWindowOps.frame(window) ?? .zero
-            Logger.log("apply: captured startFrame=\(state.startFrame)", subsystem: "runtime")
+            AppLogger.log("apply: captured startFrame=\(state.startFrame)", subsystem: "runtime")
         }
 
         if curr.hasCommitted && !prev.hasCommitted {
-            Logger.log("apply: COMMIT transition, targetFrame=\(curr.targetFrame)", subsystem: "runtime")
+            AppLogger.log("apply: COMMIT transition, targetFrame=\(curr.targetFrame)", subsystem: "runtime")
             commitPreview(to: curr.targetFrame)
             let policy = WindowMutabilityPolicy.decision(for: activeBundleID)
-            Logger.log("apply: policy decision=\(policy) for \(activeBundleID)", subsystem: "runtime")
+            AppLogger.log("apply: policy decision=\(policy) for \(activeBundleID)", subsystem: "runtime")
             if policy == .allow {
-                Logger.log("apply: calling setFrame with \(curr.targetFrame)", subsystem: "runtime")
+                AppLogger.log("apply: calling setFrame with \(curr.targetFrame)", subsystem: "runtime")
                 AXWindowOps.setFrame(window, curr.targetFrame)
             } else {
-                Logger.log("apply: policy blocked frame move", subsystem: "runtime")
+                AppLogger.log("apply: policy blocked frame move", subsystem: "runtime")
             }
         } else if !curr.hasCommitted && curr.progress == 0
                     && (prev.accumulatedX != 0 || prev.accumulatedY != 0) {
-            Logger.log("apply: CANCEL, resetting to startFrame=\(state.startFrame)", subsystem: "runtime")
+            AppLogger.log("apply: CANCEL, resetting to startFrame=\(state.startFrame)", subsystem: "runtime")
             if !state.startFrame.isEmpty && WindowMutabilityPolicy.decision(for: activeBundleID) == .allow {
                 AXWindowOps.setFrame(window, state.startFrame)
             }
             dismissPreview(animated: true)
         } else if curr.progress > 0 {
-            Logger.log("apply: preview update progress=\(curr.progress)", subsystem: "runtime")
+            AppLogger.log("apply: preview update progress=\(curr.progress)", subsystem: "runtime")
             updatePreview(from: state.startFrame, to: curr.targetFrame, progress: curr.progress)
         }
     }
