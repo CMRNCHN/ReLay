@@ -15,17 +15,16 @@ struct WindowMutabilityProfile {
 enum WindowMutabilityDecision {
     case allow       // known movable — write position + size
     case deny        // known non-movable — no AX write
-    case skipWindow  // unknown app — no AX write (default)
+    case skipWindow  // explicitly skipped — no AX write
 }
 
 // MARK: - Policy
 // Single source of truth. Pure function. No side effects.
-// entries populated from AXTest survey output only — never guessed.
-// Default: deny-by-absence. Unknown apps never move.
+// Known profiles override the default. Unknown apps are allowed unless listed as deny.
 
 enum WindowMutabilityPolicy {
 
-    static let defaultDecision: WindowMutabilityDecision = .skipWindow
+    static let defaultDecision: WindowMutabilityDecision = .allow
 
     private static let entries: [String: WindowMutabilityProfile] = [
         "com.apple.finder": WindowMutabilityProfile(
@@ -72,6 +71,13 @@ enum WindowMutabilityPolicy {
         ),
         "com.apple.mail": WindowMutabilityProfile(
             bundleID: "com.apple.mail",
+            supportsAXPosition: true,
+            supportsAXSize: true,
+            isResponsiveToAX: true,
+            lastKnownFailureRate: 0.0
+        ),
+        "com.todesktop.230313mzl4w4u92": WindowMutabilityProfile(
+            bundleID: "com.todesktop.230313mzl4w4u92",
             supportsAXPosition: true,
             supportsAXSize: true,
             isResponsiveToAX: true,

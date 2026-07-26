@@ -80,4 +80,9 @@ enum AXWindowOps {
         guard let sizeV = AXValueCreate(.cgSize, &s) else { return false }
         return AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sizeV) == .success
     }
+
+    @discardableResult
+    static func minimize(_ window: AXUIElement) -> Bool {
+        return AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, true as CFTypeRef) == .success
+    }
 }

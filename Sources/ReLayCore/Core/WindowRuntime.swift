@@ -10,16 +10,27 @@ public final class WindowRuntime: EventTapCaptureDelegate {
     private let capture: EventTapCapture
     private var state:          State  = State()
     private var activeBundleID: String = ""
-    private let config:         Config
+    private var config:         Config
 
     private var previewOverlay:    NSWindow?
     private var snapTargetOverlay: NSWindow?
+    private var layoutAnchor:      AXUIElement?
 
     public init(config: Config = .load()) {
         self.config  = config
         self.capture = EventTapCapture()
         setupPreview()
         capture.delegate = self
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(reloadConfig),
+            name: ReLaySettings.settingsChanged,
+            object: nil
+        )
+    }
+
+    @objc private func reloadConfig() {
+        config = Config.load()
     }
 
     public func start() throws { try capture.start() }
@@ -29,54 +40,124 @@ public final class WindowRuntime: EventTapCaptureDelegate {
 
     func didReceive(_ intent: WindowIntent) {
         let window: AXUIElement? = (intent.phase == .began) ? AXWindowOps.frontmost() : state.activeWindow
-        if intent.phase == .began {
+        if intent.phase == .began, let window {
             activeBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""
+            if let anchor = layoutAnchor, CFEqual(anchor, window) {
+                // same window — keep layout for chained transitions (half → third)
+            } else {
+                state.layout = .floating
+                layoutAnchor = window
+            }
+        }
+        let startFrame: CGRect
+        if intent.phase == .began, let window {
+            startFrame = AXWindowOps.frame(window) ?? .zero
+        } else {
+            startFrame = state.startFrame
         }
         let screen = window.flatMap { AXWindowOps.frame($0) }.map { Self.usableScreen(containing: $0) } ?? .zero
         let input  = Input(dx: intent.dx, dy: intent.dy,
-                           phase: intent.phase, window: window, screenFrame: screen)
+                           phase: intent.phase, window: window,
+                           screenFrame: screen, startFrame: startFrame)
         let prev = state
-        state    = reduce(state, input)
+        state    = reduce(state, input, config: config)
         apply(prev: prev, curr: state)
     }
 
     // MARK: - Apply
 
     private func apply(prev: State, curr: State) {
-        guard let window = curr.activeWindow else {
-            Logger.log("apply: no active window", subsystem: "runtime")
+        if curr.hasCommitted && !prev.hasCommitted {
+            guard let window = curr.activeWindow else { return }
+
+            // Minimize path — send window to dock, never close the app
+            if curr.shouldMinimize {
+                dismissPreview(animated: false)
+                if WindowMutabilityPolicy.decision(for: activeBundleID) == .allow {
+                    AXWindowOps.minimize(window)
+                    performSnapHaptic()
+                }
+                layoutAnchor = nil
+                resetGestureState(preservingLayout: .floating)
+                return
+            }
+
+            commitPreview(to: curr.targetFrame)
+            let policy = WindowMutabilityPolicy.decision(for: activeBundleID)
+            if policy == .allow {
+                AXWindowOps.setFrame(window, curr.targetFrame)
+                layoutAnchor = window
+                performSnapHaptic()
+                let screen = Self.usableScreen(containing: curr.targetFrame)
+                applyCompanionLayouts(primary: window, layout: curr.layout, screen: screen)
+            }
+            resetGestureState(preservingLayout: curr.layout)
             return
         }
 
-        Logger.log("apply: committed=\(curr.hasCommitted) progress=\(curr.progress) bundleID=\(activeBundleID)", subsystem: "runtime")
-
-        if prev.activeWindow == nil && curr.activeWindow != nil {
-            state.startFrame = AXWindowOps.frame(window) ?? .zero
-            Logger.log("apply: captured startFrame=\(state.startFrame)", subsystem: "runtime")
-        }
-
-        if curr.hasCommitted && !prev.hasCommitted {
-            Logger.log("apply: COMMIT transition, targetFrame=\(curr.targetFrame)", subsystem: "runtime")
-            commitPreview(to: curr.targetFrame)
-            let policy = WindowMutabilityPolicy.decision(for: activeBundleID)
-            Logger.log("apply: policy decision=\(policy) for \(activeBundleID)", subsystem: "runtime")
-            if policy == .allow {
-                Logger.log("apply: calling setFrame with \(curr.targetFrame)", subsystem: "runtime")
-                AXWindowOps.setFrame(window, curr.targetFrame)
-            } else {
-                Logger.log("apply: policy blocked frame move", subsystem: "runtime")
-            }
-        } else if !curr.hasCommitted && curr.progress == 0
-                    && (prev.accumulatedX != 0 || prev.accumulatedY != 0) {
-            Logger.log("apply: CANCEL, resetting to startFrame=\(state.startFrame)", subsystem: "runtime")
-            if !state.startFrame.isEmpty && WindowMutabilityPolicy.decision(for: activeBundleID) == .allow {
-                AXWindowOps.setFrame(window, state.startFrame)
+        if curr.shouldRevert {
+            if let window = curr.activeWindow,
+               !curr.startFrame.isEmpty,
+               WindowMutabilityPolicy.decision(for: activeBundleID) == .allow {
+                AXWindowOps.setFrame(window, curr.startFrame)
             }
             dismissPreview(animated: true)
-        } else if curr.progress > 0 {
-            Logger.log("apply: preview update progress=\(curr.progress)", subsystem: "runtime")
-            updatePreview(from: state.startFrame, to: curr.targetFrame, progress: curr.progress)
+            resetGestureState(preservingLayout: curr.layout)
+            return
         }
+
+        guard curr.activeWindow != nil else { return }
+
+        if curr.progress > 0 {
+            updatePreview(from: curr.startFrame, to: curr.targetFrame, progress: curr.progress)
+        }
+    }
+
+    private func performSnapHaptic() {
+        guard ReLaySettings.hapticsEnabled else { return }
+        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+    }
+
+    /// After a half/third snap, tile other same-screen windows into the leftover region.
+    private func applyCompanionLayouts(primary: AXUIElement, layout: WindowLayoutState, screen: CGRect) {
+        guard screen != .zero else { return }
+        let companions = companionWindows(excluding: primary, on: screen)
+        guard !companions.isEmpty else { return }
+        let frames = LayoutFrameResolver.companionFrames(
+            for: layout,
+            count: companions.count,
+            in: screen
+        )
+        for (win, frame) in zip(companions, frames) {
+            AXWindowOps.setFrame(win, frame)
+        }
+    }
+
+    private func companionWindows(excluding primary: AXUIElement, on screen: CGRect) -> [AXUIElement] {
+        let ownBundle = Bundle.main.bundleIdentifier
+        var result: [AXUIElement] = []
+        for win in AXWindowOps.allVisible() {
+            if CFEqual(win, primary) { continue }
+            guard let frame = AXWindowOps.frame(win) else { continue }
+            let overlap = frame.intersection(screen)
+            guard overlap.width > 40, overlap.height > 40 else { continue }
+
+            var pid: pid_t = 0
+            AXUIElementGetPid(win, &pid)
+            guard let app = NSRunningApplication(processIdentifier: pid) else { continue }
+            if let ownBundle, app.bundleIdentifier == ownBundle { continue }
+            let bid = app.bundleIdentifier ?? ""
+            guard WindowMutabilityPolicy.decision(for: bid) == .allow else { continue }
+
+            result.append(win)
+            if result.count >= 4 { break }
+        }
+        return result
+    }
+
+    private func resetGestureState(preservingLayout layout: WindowLayoutState) {
+        state = State()
+        state.layout = layout
     }
 
     // MARK: - Screen resolution (NSScreen — not AX)
@@ -142,18 +223,19 @@ public final class WindowRuntime: EventTapCaptureDelegate {
         snapTargetOverlay?.alphaValue = 0; snapTargetOverlay?.orderOut(nil)
         overlay.setFrame(axToAppKit(frame), display: true)
         NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.220
+            ctx.duration = config.snapDuration
             ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.8, 0.2, 1)
             overlay.animator().alphaValue = 0
         }, completionHandler: { overlay.orderOut(nil) })
     }
 
     private func dismissPreview(animated: Bool) {
+        let dismissDuration = max(0.08, config.snapDuration * 0.55)
         for win in [previewOverlay, snapTargetOverlay].compactMap({ $0 }) {
             guard win.isVisible else { continue }
             if animated {
                 NSAnimationContext.runAnimationGroup(
-                    { $0.duration = 0.120; win.animator().alphaValue = 0 },
+                    { $0.duration = dismissDuration; win.animator().alphaValue = 0 },
                     completionHandler: { win.orderOut(nil) })
             } else { win.alphaValue = 0; win.orderOut(nil) }
         }
@@ -182,8 +264,8 @@ enum GestureDirection: Hashable {
         if abs(effectiveX) > abs(effectiveY) {
             self = effectiveX > 0 ? .right : .left
         } else {
-            // Natural scrolling: positive Y = swipe up
-            self = effectiveY > 0 ? .up : .down
+            // Trackpad scroll deltas: positive Y = fingers moved down → shrink / minimize
+            self = effectiveY > 0 ? .down : .up
         }
     }
 }
@@ -258,6 +340,31 @@ class LayoutTransitionGraph {
         add(.rightTopSixth,   .left,  .leftTopSixth)
         add(.rightBottomSixth,.left,  .leftBottomSixth)
 
-        // Vertical gestures (up/down) are resolved directly in the reducer.
+        // Vertical — swipe up rotates: floating → center → fullscreen → center → …
+        // (never enters native macOS fullscreen; fullscreen here = fills usable screen area)
+        add(.floating,    .up, .center)
+        add(.center,      .up, .fullscreen)
+        add(.fullscreen,  .up, .center)   // wraps back — keeps toggling between the two
+        // Column/sixth states grow to fullscreen
+        for state in [WindowLayoutState.leftHalf, .rightHalf,
+                      .leftThird, .rightThird,
+                      .leftTopSixth, .leftBottomSixth,
+                      .rightTopSixth, .rightBottomSixth] {
+            add(state, .up, .fullscreen)
+        }
+
+        // Vertical — swipe down only ever shrinks, never grows
+        // fullscreen and center collapse to floating; floating → minimize (in reducer)
+        add(.fullscreen, .down, .floating)
+        add(.center,     .down, .floating)
+        // Half columns step down to third before minimizing
+        add(.leftHalf,  .down, .leftThird)
+        add(.rightHalf, .down, .rightThird)
+        // leftThird/rightThird → minimize (handled in reducer, no table entry needed)
+        // Sixths collapse to floating
+        for state in [WindowLayoutState.leftTopSixth, .leftBottomSixth,
+                      .rightTopSixth, .rightBottomSixth] {
+            add(state, .down, .floating)
+        }
     }
 }
