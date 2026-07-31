@@ -43,28 +43,107 @@ enum AXWindowOps {
         return nil
     }
 
+    /// Topmost AX window under a global point (Quartz / AX top-left space).
+    static func window(at point: CGPoint) -> AXUIElement? {
+        let systemWide = AXUIElementCreateSystemWide()
+        var element: AXUIElement?
+        guard AXUIElementCopyElementAtPosition(
+            systemWide,
+            Float(point.x),
+            Float(point.y),
+            &element
+        ) == .success,
+        let start = element
+        else { return nil }
+        return enclosingWindow(startingAt: start)
+    }
+
+    /// Resolve an AX window for a window-server entry (pid + bounds).
+    /// Cheaper than `allVisible()` when you already know which window you want.
+    static func window(pid: pid_t, matching bounds: CGRect, tolerance: CGFloat = 4) -> AXUIElement? {
+        let axApp = AXUIElementCreateApplication(pid)
+        var ref: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &ref) == .success,
+              let list = ref as? [AXUIElement]
+        else { return nil }
+        for win in list where isStandardWindow(win) {
+            guard let f = frame(win), WindowServerList.framesMatch(f, bounds, tolerance: tolerance)
+            else { continue }
+            return win
+        }
+        return nil
+    }
+
+    static func bundleID(for window: AXUIElement) -> String {
+        var pid: pid_t = 0
+        AXUIElementGetPid(window, &pid)
+        return NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? ""
+    }
+
     static func allVisible() -> [AXUIElement] {
         var result: [AXUIElement] = []
         for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
             let axApp = AXUIElementCreateApplication(app.processIdentifier)
-            AXUIElementSetAttributeValue(axApp, "AXEnhancedUserInterface" as CFString, true as CFTypeRef)
             var ref: CFTypeRef?
             guard AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &ref) == .success,
                   let list = ref as? [AXUIElement] else { continue }
-            for win in list {
-                var r: CFTypeRef?
-                if AXUIElementCopyAttributeValue(win, kAXMinimizedAttribute as CFString, &r) == .success,
-                   (r as? Bool) == true { continue }
-                result.append(win)
-            }
+            result.append(contentsOf: list.filter(isStandardWindow))
         }
         return result
     }
 
+    private static func enclosingWindow(startingAt start: AXUIElement) -> AXUIElement? {
+        var current = start
+        for _ in 0..<32 {
+            if string(current, kAXRoleAttribute) == (kAXWindowRole as String) {
+                return current
+            }
+            var parentRef: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(current, kAXParentAttribute as CFString, &parentRef) == .success,
+                  let parentRef
+            else { return nil }
+            current = (parentRef as! AXUIElement)
+        }
+        return nil
+    }
+
+    /// `kAXWindows` also returns things that are not user-movable windows —
+    /// most notably Finder's desktop, which is an `AXScrollArea` the size of
+    /// the whole display and therefore beats every real window on area.
+    static func isStandardWindow(_ window: AXUIElement) -> Bool {
+        guard string(window, kAXRoleAttribute) == (kAXWindowRole as String),
+              string(window, kAXSubroleAttribute) == (kAXStandardWindowSubrole as String)
+        else { return false }
+        return bool(window, kAXMinimizedAttribute) != true
+    }
+
+    private static func string(_ element: AXUIElement, _ attribute: String) -> String? {
+        var ref: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &ref) == .success
+        else { return nil }
+        return ref as? String
+    }
+
+    private static func bool(_ element: AXUIElement, _ attribute: String) -> Bool? {
+        var ref: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &ref) == .success
+        else { return nil }
+        return ref as? Bool
+    }
+
     // MARK: - Write
 
+    /// - Parameter prepareApp: When false, skips the EUI disable probe — caller
+    ///   must have already called `disableEnhancedUserInterface` for this app
+    ///   (e.g. once at the start of a linked-resize session).
     @discardableResult
-    static func setFrame(_ window: AXUIElement, _ rect: CGRect) -> Bool {
+    static func setFrame(_ window: AXUIElement, _ rect: CGRect, prepareApp: Bool = true) -> Bool {
+        // AXEnhancedUserInterface makes the window server *animate* AX frame
+        // writes. The size/position/size sequence below then races its own
+        // animation and the window lands somewhere else. Every window manager
+        // turns it off before writing; so do we.
+        if prepareApp { disableEnhancedUserInterface(owning: window) }
+
         var pos = rect.origin, size = rect.size
         guard let posV  = AXValueCreate(.cgPoint, &pos),
               let sizeV = AXValueCreate(.cgSize,  &size) else { return false }
@@ -72,6 +151,20 @@ enum AXWindowOps {
         let r2 = AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, posV)
         let r3 = AXUIElementSetAttributeValue(window, kAXSizeAttribute     as CFString, sizeV)
         return r1 == .success && r2 == .success && r3 == .success
+    }
+
+    static let enhancedUserInterfaceAttribute = "AXEnhancedUserInterface"
+
+    static func disableEnhancedUserInterface(owning window: AXUIElement) {
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(window, &pid) == .success else { return }
+        let axApp = AXUIElementCreateApplication(pid)
+        guard bool(axApp, enhancedUserInterfaceAttribute) == true else { return }
+        AXUIElementSetAttributeValue(
+            axApp,
+            enhancedUserInterfaceAttribute as CFString,
+            false as CFTypeRef
+        )
     }
 
     @discardableResult
@@ -84,5 +177,10 @@ enum AXWindowOps {
     @discardableResult
     static func minimize(_ window: AXUIElement) -> Bool {
         return AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, true as CFTypeRef) == .success
+    }
+
+    @discardableResult
+    static func unminimize(_ window: AXUIElement) -> Bool {
+        return AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, false as CFTypeRef) == .success
     }
 }

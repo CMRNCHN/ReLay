@@ -31,6 +31,26 @@ struct Input {
     let window:      AXUIElement?
     let screenFrame: CGRect
     let startFrame:  CGRect
+    /// Center layout is only offered when this window is alone on the screen.
+    let allowCenter: Bool
+
+    init(
+        dx: CGFloat,
+        dy: CGFloat,
+        phase: WindowIntent.Phase,
+        window: AXUIElement?,
+        screenFrame: CGRect,
+        startFrame: CGRect,
+        allowCenter: Bool = true
+    ) {
+        self.dx = dx
+        self.dy = dy
+        self.phase = phase
+        self.window = window
+        self.screenFrame = screenFrame
+        self.startFrame = startFrame
+        self.allowCenter = allowCenter
+    }
 }
 
 // MARK: - State
@@ -48,6 +68,11 @@ struct State {
     var activeWindow:   AXUIElement?      = nil
     var startFrame:     CGRect            = .zero
     var targetFrame:    CGRect            = .zero
+    /// Captured at gesture began — whether `.center` is a valid swipe target.
+    var allowCenter:    Bool              = true
+    /// Last known unmanaged geometry, restored when a window collapses back to
+    /// `.floating`. Survives `resetGestureState`.
+    var floatingFrame:  CGRect            = .zero
 }
 
 // MARK: - Reducer
@@ -70,6 +95,10 @@ func reduce(_ state: State, _ input: Input, config: Config = .load()) -> State {
         s.targetFrame    = .zero
         s.activeWindow   = input.window
         s.startFrame     = input.startFrame
+        s.allowCenter    = input.allowCenter
+        if s.layout == .floating, !input.startFrame.isEmpty {
+            s.floatingFrame = input.startFrame
+        }
 
     case .changed:
         guard !s.hasCommitted else { return s }
@@ -81,6 +110,11 @@ func reduce(_ state: State, _ input: Input, config: Config = .load()) -> State {
         guard !s.hasCommitted else { return s }
         s = accumulateGesture(s, input, config: config)
         guard !s.shouldRevert else { return s }
+
+        // Nothing to act on: the gesture began outside any window, or the
+        // window was dropped mid-gesture. Committing here would advance the
+        // layout while the screen stays put.
+        guard s.activeWindow != nil else { return cleared(s) }
 
         let dist = max(abs(s.accumulatedX), abs(s.accumulatedY))
         if dist >= config.actionThreshold {
@@ -137,24 +171,28 @@ private func updateSnapPreview(_ s: State, input: Input, config: Config) -> Stat
                         max(1, config.actionThreshold - config.lockThreshold))
 
     guard let dir = GestureDirection(effectiveX: out.accumulatedX, effectiveY: out.accumulatedY),
-          let nextLayout = transitions.nextState(from: out.layout, moving: dir)
+          let nextLayout = transitions.nextState(from: out.layout, moving: dir, allowCenter: out.allowCenter)
     else { return out }
 
     out.targetLayout = nextLayout
     // End frame only — WindowRuntime interpolates once using `progress`.
-    out.targetFrame = LayoutFrameResolver.frame(for: nextLayout, in: input.screenFrame)
+    out.targetFrame = nextLayout == .floating && !out.floatingFrame.isEmpty
+        ? out.floatingFrame
+        : LayoutFrameResolver.frame(for: nextLayout, in: input.screenFrame)
     return out
 }
 
 private func commitSnap(_ s: State, input: Input) -> State {
     var out = s
     guard let dir = GestureDirection(effectiveX: out.accumulatedX, effectiveY: out.accumulatedY),
-          let nextLayout = transitions.nextState(from: out.layout, moving: dir)
+          let nextLayout = transitions.nextState(from: out.layout, moving: dir, allowCenter: out.allowCenter)
     else { return cleared(out) }
 
     out.targetLayout = nextLayout
     out.layout       = nextLayout
-    out.targetFrame  = LayoutFrameResolver.frame(for: nextLayout, in: input.screenFrame)
+    out.targetFrame  = nextLayout == .floating && !out.floatingFrame.isEmpty
+        ? out.floatingFrame
+        : LayoutFrameResolver.frame(for: nextLayout, in: input.screenFrame)
     out.progress     = 1
     out.hasCommitted = true
     return out

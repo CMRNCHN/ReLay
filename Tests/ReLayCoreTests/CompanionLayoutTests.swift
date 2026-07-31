@@ -22,7 +22,7 @@ final class CompanionLayoutTests: XCTestCase {
         let frames = LayoutFrameResolver.companionFrames(for: .leftThird, count: 1, in: screen, gap: gap)
         XCTAssertEqual(frames.count, 1)
         let primary = LayoutFrameResolver.frame(for: .leftThird, in: screen, gap: gap)
-        XCTAssertEqual(frames[0].minX, primary.maxX, accuracy: 0.5)
+        XCTAssertEqual(frames[0].minX, primary.maxX + gap, accuracy: 0.5)
         XCTAssertEqual(frames[0].maxX, LayoutFrameResolver.frame(for: .fullscreen, in: screen, gap: gap).maxX, accuracy: 0.5)
         XCTAssertEqual(frames[0].height, primary.height, accuracy: 0.5)
     }
@@ -46,5 +46,90 @@ final class CompanionLayoutTests: XCTestCase {
 
     func testZeroCountReturnsEmpty() {
         XCTAssertTrue(LayoutFrameResolver.companionFrames(for: .leftHalf, count: 0, in: screen).isEmpty)
+    }
+
+    func testThirdToFullscreenMinimizesOthers() {
+        XCTAssertTrue(WindowRuntime.shouldMinimizeOthers(from: .leftThird, to: .fullscreen))
+        XCTAssertTrue(WindowRuntime.shouldMinimizeOthers(from: .rightThird, to: .fullscreen))
+        XCTAssertTrue(WindowRuntime.shouldMinimizeOthers(from: .leftHalf, to: .fullscreen))
+        XCTAssertTrue(WindowRuntime.shouldMinimizeOthers(from: .leftTwoThirds, to: .fullscreen))
+        XCTAssertTrue(WindowRuntime.shouldMinimizeOthers(from: .floating, to: .fullscreen))
+        XCTAssertFalse(WindowRuntime.shouldMinimizeOthers(from: .leftThird, to: .leftHalf))
+        XCTAssertFalse(WindowRuntime.shouldMinimizeOthers(from: .fullscreen, to: .fullscreen))
+    }
+
+    func testSwipeFromThirdToFullscreenMinimizesCompanions() {
+        let sim = RuntimeMirror()
+        let left = LayoutFrameResolver.frame(for: .leftThird, in: sim.screen)
+        let right = LayoutFrameResolver.frame(for: .rightThird, in: sim.screen)
+        let mid = LayoutFrameResolver.frame(for: .leftHalf, in: sim.screen) // another on-screen window
+        sim.frames[101] = left
+        sim.frames[102] = right
+        sim.frames[103] = mid
+        sim.bundleIDs = [
+            101: "com.example.a",
+            102: "com.example.b",
+            103: "com.example.c",
+        ]
+        // Would otherwise try to place a companion — must not, for this path.
+        sim.companionPicker = { _, _ in 102 }
+
+        sim.swipe(on: 101, dx: 0, dy: -200) // up → fullscreen
+
+        XCTAssertEqual(sim.layout, .fullscreen)
+        XCTAssertEqual(sim.frames[101], LayoutFrameResolver.frame(for: .fullscreen, in: sim.screen))
+        XCTAssertEqual(Set(sim.minimized), Set([102, 103]))
+        XCTAssertFalse(sim.writes.contains { $0.window == 102 },
+                       "companions should be minimized, not retiled")
+    }
+
+    func testSwipeFromHalfToFullscreenMinimizesCompanions() {
+        let sim = RuntimeMirror()
+        sim.frames[101] = LayoutFrameResolver.frame(for: .leftHalf, in: sim.screen)
+        sim.frames[102] = LayoutFrameResolver.frame(for: .rightHalf, in: sim.screen)
+        sim.bundleIDs = [101: "com.example.a", 102: "com.example.b"]
+        // half → twoThirds (no minimize), then twoThirds → fullscreen (minimize)
+        sim.swipe(on: 101, dx: 0, dy: -200)
+        XCTAssertEqual(sim.layout, .leftTwoThirds)
+        XCTAssertTrue(sim.minimized.isEmpty)
+
+        sim.swipe(on: 101, dx: 0, dy: -200)
+        XCTAssertEqual(sim.layout, .fullscreen)
+        XCTAssertEqual(sim.minimized, [102])
+    }
+
+    func testMinimizingOneOfTwoExpandsTheOther() {
+        let sim = RuntimeMirror()
+        sim.frames[101] = LayoutFrameResolver.frame(for: .leftThird, in: sim.screen)
+        sim.frames[102] = LayoutFrameResolver.frame(for: .rightTwoThirds, in: sim.screen)
+        sim.bundleIDs = [101: "com.example.a", 102: "com.example.b"]
+
+        // Down from third → minimize 101; peer 102 should fill the screen.
+        sim.swipe(on: 101, dx: 0, dy: 200)
+        XCTAssertEqual(sim.minimized, [101])
+        XCTAssertEqual(sim.frames[102], LayoutFrameResolver.frame(for: .fullscreen, in: sim.screen))
+    }
+
+    func testLeavingFullscreenRestoresMinimizedCompanionIntoThird() {
+        let sim = RuntimeMirror()
+        sim.frames[101] = LayoutFrameResolver.frame(for: .leftTwoThirds, in: sim.screen)
+        sim.frames[102] = LayoutFrameResolver.frame(for: .rightThird, in: sim.screen)
+        sim.bundleIDs = [101: "com.example.a", 102: "com.example.b"]
+
+        // Enlarge to fullscreen → stash 102
+        sim.swipe(on: 101, dx: 0, dy: -200)
+        XCTAssertEqual(sim.layout, .fullscreen)
+        XCTAssertEqual(sim.minimized, [102])
+
+        // First down step: two-thirds, leftover is the ⅓ slot — restore 102 there.
+        sim.swipe(on: 101, dx: 0, dy: 200)
+        XCTAssertEqual(sim.layout, .leftTwoThirds)
+        XCTAssertEqual(sim.unminimized, [102])
+        XCTAssertEqual(
+            sim.frames[102],
+            LayoutFrameResolver.frame(for: .rightThird, in: sim.screen)
+        )
+        XCTAssertTrue(WindowRuntime.shouldRestoreMinimized(from: .fullscreen, to: .leftTwoThirds))
+        XCTAssertFalse(WindowRuntime.shouldRestoreMinimized(from: .leftTwoThirds, to: .leftHalf))
     }
 }

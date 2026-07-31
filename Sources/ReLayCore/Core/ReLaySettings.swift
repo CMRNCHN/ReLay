@@ -17,6 +17,8 @@ public enum ReLaySettings {
         public static let snapDuration = "snapDuration"
         public static let snapHapticsEnabled = "snapHapticsEnabled"
         public static let interceptionEnabled = "interceptionEnabled"
+        public static let snapPreviewEnabled = "snapPreviewEnabled"
+        public static let snapAnimateEnabled = "snapAnimateEnabled"
     }
 
     // MARK: - Defaults
@@ -26,9 +28,12 @@ public enum ReLaySettings {
         public static let cancelThreshold: Double = 25
         public static let actionThreshold: Double = 100
         public static let flickVelocity: Double = 800
-        public static let snapDuration: Double = 0.22
+        public static let snapDuration: Double = 0.28
         public static let snapHapticsEnabled = true
         public static let interceptionEnabled = true
+        /// Destination silhouette during swipe — off by default (was the "ghost").
+        public static let snapPreviewEnabled = false
+        public static let snapAnimateEnabled = true
     }
 
     // MARK: - Read
@@ -61,6 +66,14 @@ public enum ReLaySettings {
         bool(forKey: Key.interceptionEnabled, default: Default.interceptionEnabled)
     }
 
+    public static var snapPreviewEnabled: Bool {
+        bool(forKey: Key.snapPreviewEnabled, default: Default.snapPreviewEnabled)
+    }
+
+    public static var snapAnimateEnabled: Bool {
+        bool(forKey: Key.snapAnimateEnabled, default: Default.snapAnimateEnabled)
+    }
+
     // MARK: - Write
 
     public static func set(_ value: Double, forKey key: String) {
@@ -81,6 +94,8 @@ public enum ReLaySettings {
         set(Default.snapDuration, forKey: Key.snapDuration)
         set(Default.snapHapticsEnabled, forKey: Key.snapHapticsEnabled)
         set(Default.interceptionEnabled, forKey: Key.interceptionEnabled)
+        set(Default.snapPreviewEnabled, forKey: Key.snapPreviewEnabled)
+        set(Default.snapAnimateEnabled, forKey: Key.snapAnimateEnabled)
     }
 
     public static func postSettingsChanged() {

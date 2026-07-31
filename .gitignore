@@ -28,6 +28,12 @@ __pycache__/
 # AI session artifacts
 .air/
 .ai_sessions/
+.bob/
+
+# Local backups / recovered binaries (never commit)
+archives/
+_relay_backup*/
+_relay_restructure_backup*/
 
 # Development scaffolding (analysis, logs, tools)
 before.txt

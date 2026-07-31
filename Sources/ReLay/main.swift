@@ -28,7 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         checkConflicts()
 
         NotificationCenter.default.addObserver(self, selector: #selector(toggleInterception), name: NSNotification.Name("ReLayEmergencyStop"), object: nil)
-        NotificationCenter.default.addObserver(forName: NSNotification.Name("ReLayInterceptionToggled"), object: nil, queue: .main) { [weak self] note in
+        NotificationCenter.default.addObserver(forName: ReLaySettings.interceptionToggled, object: nil, queue: .main) { [weak self] note in
             let enabled = note.userInfo?["enabled"] as? Bool ?? true
             if enabled { self?.startRuntime() } else { self?.runtime.stop() }
             self?.updateMenuBarIcon(permitted: true)
@@ -39,11 +39,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func checkAccessibilityAndStart() {
         if AccessibilityBootstrap.isGranted() {
-            startRuntime()
             updateMenuBarIcon(permitted: true)
-        } else {
-            showAccessibilityPrompt()
+            startRuntimeIfInterceptionEnabled()
+            return
         }
+
+        // No modal on launch — just register quietly, show a warning icon,
+        // and start once the user enables Accessibility in System Settings.
+        updateMenuBarIcon(permitted: false)
+        AccessibilityBootstrap.registerSilently()
+        Logger.log("accessibility not granted — waiting silently", subsystem: "startup")
+        AccessibilityBootstrap.startPolling { [weak self] in
+            self?.updateMenuBarIcon(permitted: true)
+            self?.startRuntimeIfInterceptionEnabled()
+        }
+    }
+
+    private func startRuntimeIfInterceptionEnabled() {
+        guard ReLaySettings.interceptionEnabled else {
+            Logger.log("gesture interception paused in settings — not starting capture", subsystem: "startup")
+            return
+        }
+        startRuntime()
     }
 
     private func startRuntime() {
@@ -59,61 +76,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func checkConflicts() {
         let conflicts = AccessibilityBootstrap.checkForConflictingApps()
         if !conflicts.isEmpty {
-            let alert = NSAlert()
-            alert.messageText = "Potential Conflicts Detected"
-            alert.informativeText = "ReLay detected other window managers running: \(conflicts.joined(separator: ", ")).\n\nHaving multiple window managers active may lead to unpredictable gesture behavior or shortcut conflicts."
-            alert.addButton(withTitle: "OK")
-            alert.runModal()
+            Logger.log("conflicting window managers detected: \(conflicts.joined(separator: ", "))", subsystem: "startup")
         }
     }
 
     // MARK: - Accessibility permission flow
 
-    private func showAccessibilityPrompt() {
-        updateMenuBarIcon(permitted: false)
-
-        // Register silently — makes ReLay appear in System Settings without triggering
-        // the macOS system popup (which would cause a confusing double-prompt).
-        AccessibilityBootstrap.registerSilently()
-
-        let alert = NSAlert()
-        alert.messageText = "Accessibility Access Required"
-        alert.informativeText = """
-            ReLay needs Accessibility access to intercept title-bar gestures and move windows.
-
-            1. Click "Open Settings" below
-            2. Find ReLay in the list and turn it ON
-            3. ReLay will start automatically — no need to do anything else
-            """
-        alert.addButton(withTitle: "Open Settings")
-        alert.addButton(withTitle: "Quit")
-
-        let response = alert.runModal()
-        if response == .alertFirstButtonReturn {
-            openAccessibilitySettings()
-            // Start polling — will auto-start the interceptor the moment permission is granted
-            AccessibilityBootstrap.startPolling { [weak self] in
-                self?.startRuntime()
-                self?.updateMenuBarIcon(permitted: true)
-                self?.showGrantedNotification()
-            }
-        } else {
-            NSApplication.shared.terminate(nil)
-        }
-    }
-
-    private func openAccessibilitySettings() {
+    @objc private func openAccessibilitySettings() {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
             NSWorkspace.shared.open(url)
         }
-    }
-
-    private func showGrantedNotification() {
-        let alert = NSAlert()
-        alert.messageText = "ReLay is Active"
-        alert.informativeText = "Accessibility access granted. ReLay is now intercepting title-bar gestures."
-        alert.addButton(withTitle: "Got it")
-        alert.runModal()
     }
 
     private func updateMenuBarIcon(permitted: Bool) {
@@ -144,6 +116,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "Save Current Layout…", action: #selector(saveCurrentLayout), keyEquivalent: "s"))
         menu.addItem(NSMenuItem(title: "Preferences…", action: #selector(openPreferences), keyEquivalent: ","))
         menu.addItem(NSMenuItem.separator())
+        menu.addItem(NSMenuItem(title: "Grant Accessibility…", action: #selector(openAccessibilitySettings), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Undo Last Layout", action: #selector(undoLayout), keyEquivalent: "z"))
         menu.addItem(NSMenuItem(title: "Shuffle Layout Windows", action: #selector(shuffleLayout), keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
@@ -233,6 +206,8 @@ extension AppDelegate: NSMenuDelegate {
             menu.insertItem(sep, at: recents.count)
         }
 
+        let needsAccessibility = !AccessibilityBootstrap.isGranted()
+        menu.item(withTitle: "Grant Accessibility…")?.isHidden = !needsAccessibility
         menu.item(withTitle: "Undo Last Layout")?.isEnabled = false
         menu.item(withTitle: "Shuffle Layout Windows")?.isEnabled = false
     }

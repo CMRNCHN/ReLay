@@ -12,9 +12,13 @@ public final class WindowRuntime: EventTapCaptureDelegate {
     private var activeBundleID: String = ""
     private var config:         Config
 
-    private var previewOverlay:    NSWindow?
     private var snapTargetOverlay: NSWindow?
-    private var layoutAnchor:      AXUIElement?
+    private let edgeResize = EdgeResizeCoordinator()
+    private var edgeResizeActive = false
+    private let dividers = DividerSliderController()
+    private let autoLayout = AutoLayoutWatcher()
+    /// Windows we minimized when entering fullscreen — restored on the way back down.
+    private var minimizedForFullscreen: [AXUIElement] = []
 
     public init(config: Config = .load()) {
         self.config  = config
@@ -33,21 +37,34 @@ public final class WindowRuntime: EventTapCaptureDelegate {
         config = Config.load()
     }
 
-    public func start() throws { try capture.start() }
-    public func stop()        { capture.stop() }
+    public func start() throws {
+        dividers.hideAll()
+        try capture.start()
+        autoLayout.start(
+            onApply: { [weak self] windows, frames, screen in
+                self?.applyAutoLayout(windows: windows, frames: frames, screen: screen)
+            },
+            onSolo: { [weak self] window, screen in
+                self?.expandToFullscreen(window, on: screen)
+            }
+        )
+    }
+
+    public func stop() {
+        capture.stop()
+        autoLayout.stop()
+        dividers.hideAll()
+    }
 
     // MARK: - Capture → Reduce → Policy → Execute
 
     func didReceive(_ intent: WindowIntent) {
-        let window: AXUIElement? = (intent.phase == .began) ? AXWindowOps.frontmost() : state.activeWindow
-        if intent.phase == .began, let window {
-            activeBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""
-            if let anchor = layoutAnchor, CFEqual(anchor, window) {
-                // same window — keep layout for chained transitions (half → third)
-            } else {
-                state.layout = .floating
-                layoutAnchor = window
-            }
+        let window: AXUIElement?
+        if intent.phase == .began {
+            window = TitleBarHitTest.windowForGesture(at: intent.location)
+                ?? AXWindowOps.frontmost()
+        } else {
+            window = state.activeWindow
         }
         let startFrame: CGRect
         if intent.phase == .began, let window {
@@ -55,54 +72,135 @@ public final class WindowRuntime: EventTapCaptureDelegate {
         } else {
             startFrame = state.startFrame
         }
-        let screen = window.flatMap { AXWindowOps.frame($0) }.map { Self.usableScreen(containing: $0) } ?? .zero
+        // Screen is stable for the gesture — reuse startFrame; do not re-AX every scroll tick.
+        let screen = startFrame == .zero ? .zero : Self.usableScreen(containing: startFrame)
+
+        // Read the layout off the screen instead of remembering what we last
+        // did: the window may have been moved by hand, resized by its app, or
+        // placed by us as somebody else's companion.
+        if intent.phase == .began, let window {
+            activeBundleID = AXWindowOps.bundleID(for: window)
+            state.layout = LayoutFrameResolver.layout(matching: startFrame, in: screen)
+        }
+        let allowCenter = intent.phase == .began
+            ? Self.visibleWindowCount(on: screen) <= 1
+            : state.allowCenter
         let input  = Input(dx: intent.dx, dy: intent.dy,
                            phase: intent.phase, window: window,
-                           screenFrame: screen, startFrame: startFrame)
+                           screenFrame: screen, startFrame: startFrame,
+                           allowCenter: allowCenter)
         let prev = state
         state    = reduce(state, input, config: config)
         apply(prev: prev, curr: state)
+    }
+
+    @discardableResult
+    func didReceiveEdgeResize(_ event: EdgeResizeEvent) -> Bool {
+        switch event {
+        case .began(let location):
+            edgeResizeActive = edgeResize.begin(at: location)
+            if edgeResizeActive {
+                // Keep auto-layout from retile-fighting while the user is dragging.
+                autoLayout.suspendBriefly()
+            }
+            return edgeResizeActive
+        case .changed:
+            guard edgeResizeActive else { return false }
+            edgeResize.update()
+            autoLayout.suspendBriefly()
+            return true
+        case .ended:
+            guard edgeResizeActive else { return false }
+            edgeResizeActive = false
+            edgeResize.end()
+            autoLayout.suspendBriefly()
+            return false
+        }
     }
 
     // MARK: - Apply
 
     private func apply(prev: State, curr: State) {
         if curr.hasCommitted && !prev.hasCommitted {
-            guard let window = curr.activeWindow else { return }
+            // No window left to act on — drop the gesture rather than keeping a
+            // committed state that the next gesture would inherit.
+            guard let window = curr.activeWindow else {
+                dismissPreview(animated: false)
+                resetGestureState(preservingLayout: prev.layout, floatingFrame: curr.floatingFrame)
+                return
+            }
 
             // Minimize path — send window to dock, never close the app
             if curr.shouldMinimize {
                 dismissPreview(animated: false)
                 if WindowMutabilityPolicy.decision(for: activeBundleID) == .allow {
+                    let screen = curr.startFrame.isEmpty
+                        ? .zero
+                        : Self.usableScreen(containing: curr.startFrame)
+                    // Capture peers before minimize so CG still lists them.
+                    let peers = screen == .zero ? [] : otherWindows(excluding: window, on: screen)
                     AXWindowOps.minimize(window)
                     performSnapHaptic()
+                    autoLayout.suspendBriefly()
+                    dividers.hideAll()
+                    if peers.count == 1 {
+                        expandToFullscreen(peers[0], on: screen)
+                    }
                 }
-                layoutAnchor = nil
-                resetGestureState(preservingLayout: .floating)
+                resetGestureState(preservingLayout: .floating, floatingFrame: curr.floatingFrame)
                 return
             }
 
             commitPreview(to: curr.targetFrame)
-            let policy = WindowMutabilityPolicy.decision(for: activeBundleID)
-            if policy == .allow {
-                AXWindowOps.setFrame(window, curr.targetFrame)
-                layoutAnchor = window
-                performSnapHaptic()
+            // Only record the new layout if the window was actually moved.
+            var committedLayout = prev.layout
+            if WindowMutabilityPolicy.decision(for: activeBundleID) == .allow {
                 let screen = Self.usableScreen(containing: curr.targetFrame)
-                applyCompanionLayouts(primary: window, layout: curr.layout, screen: screen)
+                // Snapshot companions before the primary grows — CG/AX matching
+                // is more reliable against the pre-fullscreen geometry.
+                let peers = Self.shouldMinimizeOthers(from: prev.layout, to: curr.layout)
+                    ? otherWindows(excluding: window, on: screen)
+                    : []
+
+                AXWindowOps.setFrame(window, curr.targetFrame)
+                committedLayout = curr.layout
+                performSnapHaptic()
+                autoLayout.suspendBriefly()
+
+                if Self.shouldMinimizeOthers(from: prev.layout, to: curr.layout) {
+                    dividers.hideAll()
+                    minimizedForFullscreen = peers
+                    for peer in peers {
+                        let ok = AXWindowOps.minimize(peer)
+                        if !ok {
+                            Logger.log("minimize peer failed", subsystem: "layout")
+                        }
+                    }
+                    Logger.log(
+                        "fullscreen clear: minimized \(peers.count) peer(s) from \(prev.layout)",
+                        subsystem: "layout"
+                    )
+                } else if Self.shouldRestoreMinimized(from: prev.layout, to: curr.layout) {
+                    restoreMinimizedCompanions(primary: window, layout: curr.layout, screen: screen)
+                } else {
+                    applyCompanionLayouts(primary: window, layout: curr.layout, screen: screen)
+                }
             }
-            resetGestureState(preservingLayout: curr.layout)
+            resetGestureState(preservingLayout: committedLayout, floatingFrame: curr.floatingFrame)
             return
         }
 
         if curr.shouldRevert {
+            // The gesture never moved the real window — only the overlay — so a
+            // revert is a no-op unless something else moved it meanwhile.
             if let window = curr.activeWindow,
                !curr.startFrame.isEmpty,
-               WindowMutabilityPolicy.decision(for: activeBundleID) == .allow {
+               WindowMutabilityPolicy.decision(for: activeBundleID) == .allow,
+               let live = AXWindowOps.frame(window), live != curr.startFrame {
                 AXWindowOps.setFrame(window, curr.startFrame)
             }
             dismissPreview(animated: true)
-            resetGestureState(preservingLayout: curr.layout)
+            resetGestureState(preservingLayout: curr.layout, floatingFrame: curr.floatingFrame)
             return
         }
 
@@ -118,46 +216,187 @@ public final class WindowRuntime: EventTapCaptureDelegate {
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
     }
 
-    /// After a half/third snap, tile other same-screen windows into the leftover region.
+    /// After a half/third snap, fill the leftover region with the best companion window.
     private func applyCompanionLayouts(primary: AXUIElement, layout: WindowLayoutState, screen: CGRect) {
         guard screen != .zero else { return }
-        let companions = companionWindows(excluding: primary, on: screen)
-        guard !companions.isEmpty else { return }
-        let frames = LayoutFrameResolver.companionFrames(
-            for: layout,
-            count: companions.count,
-            in: screen
+        guard let companion = bestCompanion(excluding: primary, on: screen) else { return }
+        let frames = LayoutFrameResolver.companionFrames(for: layout, count: 1, in: screen)
+        guard let frame = frames.first else { return }
+        let height = NSScreen.screens.first?.frame.height ?? 0
+        LayoutMotion.apply(
+            windows: [companion],
+            frames: [frame],
+            duration: max(0.2, config.snapDuration * 0.85),
+            animated: ReLaySettings.snapAnimateEnabled,
+            screenHeight: height
         )
-        for (win, frame) in zip(companions, frames) {
-            AXWindowOps.setFrame(win, frame)
+        let delay = ReLaySettings.snapAnimateEnabled ? max(0.1, config.snapDuration * 0.5) : 0.04
+        dividers.showLater(between: primary, and: companion, after: delay)
+    }
+
+    /// Any swipe that fills the screen should clear the rest of the desk.
+    static func shouldMinimizeOthers(from previous: WindowLayoutState, to next: WindowLayoutState) -> Bool {
+        next == .fullscreen && previous != .fullscreen
+    }
+
+    /// Leaving fill-screen restores the windows we stashed for that enlarge.
+    /// First down step is two-thirds, which leaves a ⅓ slot for the companion.
+    static func shouldRestoreMinimized(from previous: WindowLayoutState, to next: WindowLayoutState) -> Bool {
+        previous == .fullscreen && next != .fullscreen
+    }
+
+    /// Unminimize windows stashed for fullscreen and seat them in the leftover region.
+    private func restoreMinimizedCompanions(
+        primary: AXUIElement,
+        layout: WindowLayoutState,
+        screen: CGRect
+    ) {
+        let peers = minimizedForFullscreen
+        minimizedForFullscreen = []
+        guard !peers.isEmpty else {
+            applyCompanionLayouts(primary: primary, layout: layout, screen: screen)
+            return
+        }
+
+        let frames = LayoutFrameResolver.companionFrames(for: layout, count: peers.count, in: screen)
+        var restored: [AXUIElement] = []
+        var restoredFrames: [CGRect] = []
+        for (index, peer) in peers.enumerated() {
+            let ok = AXWindowOps.unminimize(peer)
+            if !ok {
+                Logger.log("unminimize peer failed", subsystem: "layout")
+            }
+            if index < frames.count {
+                restored.append(peer)
+                restoredFrames.append(frames[index])
+            }
+        }
+        if !restored.isEmpty {
+            let height = NSScreen.screens.first?.frame.height ?? 0
+            LayoutMotion.apply(
+                windows: restored,
+                frames: restoredFrames,
+                duration: max(0.22, config.snapDuration),
+                animated: ReLaySettings.snapAnimateEnabled,
+                screenHeight: height
+            )
+            let placed = restored[0]
+            let delay = ReLaySettings.snapAnimateEnabled ? max(0.12, config.snapDuration * 0.55) : 0.05
+            dividers.showLater(between: primary, and: placed, after: delay)
+        }
+        Logger.log("restored \(peers.count) peer(s) after leaving fullscreen → \(layout)", subsystem: "layout")
+    }
+
+    /// Send every other eligible window on `screen` to the Dock / Stage Manager.
+    private func minimizeOtherWindows(excluding primary: AXUIElement, on screen: CGRect) {
+        for window in otherWindows(excluding: primary, on: screen) {
+            AXWindowOps.minimize(window)
         }
     }
 
-    private func companionWindows(excluding primary: AXUIElement, on screen: CGRect) -> [AXUIElement] {
-        let ownBundle = Bundle.main.bundleIdentifier
+    /// All eligible companions on the current Space (front-to-back), excluding `primary`.
+    private func otherWindows(excluding primary: AXUIElement, on screen: CGRect) -> [AXUIElement] {
+        var primaryPID: pid_t = 0
+        AXUIElementGetPid(primary, &primaryPID)
+        let primaryFrame = AXWindowOps.frame(primary)
+        let excluded = Bundle.main.bundleIdentifier.map { Set([$0]) } ?? []
+        let order = WindowServerList.onScreenOrder()
         var result: [AXUIElement] = []
-        for win in AXWindowOps.allVisible() {
-            if CFEqual(win, primary) { continue }
-            guard let frame = AXWindowOps.frame(win) else { continue }
-            let overlap = frame.intersection(screen)
-            guard overlap.width > 40, overlap.height > 40 else { continue }
 
-            var pid: pid_t = 0
-            AXUIElementGetPid(win, &pid)
-            guard let app = NSRunningApplication(processIdentifier: pid) else { continue }
-            if let ownBundle, app.bundleIdentifier == ownBundle { continue }
-            let bid = app.bundleIdentifier ?? ""
-            guard WindowMutabilityPolicy.decision(for: bid) == .allow else { continue }
-
+        func appendUnique(_ win: AXUIElement) {
+            if result.contains(where: { CFEqual($0, win) }) { return }
             result.append(win)
-            if result.count >= 4 { break }
+        }
+
+        for (z, entry) in order.enumerated() {
+            if let primaryFrame,
+               entry.pid == primaryPID,
+               WindowServerList.framesMatch(entry.bounds, primaryFrame) {
+                continue
+            }
+            let bundleID = NSRunningApplication(processIdentifier: entry.pid)?.bundleIdentifier ?? ""
+            let candidate = CompanionSelector.Candidate(
+                id: z, frame: entry.bounds, bundleID: bundleID, zOrder: z
+            )
+            guard CompanionSelector.isEligible(candidate, on: screen, excludingBundleIDs: excluded)
+            else { continue }
+            if let win = AXWindowOps.window(pid: entry.pid, matching: entry.bounds)
+                    ?? AXWindowOps.window(pid: entry.pid, matching: entry.bounds, tolerance: 24),
+               !CFEqual(win, primary) {
+                appendUnique(win)
+            }
+        }
+
+        // Fallback: AX enumeration when CG→AX matching misses Electron / mismatched frames.
+        if result.isEmpty {
+            for win in AXWindowOps.allVisible() where !CFEqual(win, primary) {
+                guard let frame = AXWindowOps.frame(win) else { continue }
+                var pid: pid_t = 0
+                AXUIElementGetPid(win, &pid)
+                let bundleID = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? ""
+                let candidate = CompanionSelector.Candidate(
+                    id: result.count, frame: frame, bundleID: bundleID, zOrder: result.count
+                )
+                guard CompanionSelector.isEligible(candidate, on: screen, excludingBundleIDs: excluded)
+                else { continue }
+                appendUnique(win)
+            }
         }
         return result
     }
 
-    private func resetGestureState(preservingLayout layout: WindowLayoutState) {
+    /// Frontmost other window on the current Space.
+    /// Walks CGWindowList front-to-back and resolves AX only for the winner.
+    private func bestCompanion(excluding primary: AXUIElement, on screen: CGRect) -> AXUIElement? {
+        otherWindows(excluding: primary, on: screen).first
+    }
+
+    /// Dock / Stage Manager: tile 2 windows into halves, 3 into thirds.
+    private func applyAutoLayout(windows: [AXUIElement], frames: [CGRect], screen: CGRect) {
+        guard windows.count == frames.count else { return }
+        dividers.hideAll()
+
+        let height = NSScreen.screens.first?.frame.height ?? 0
+        let duration = max(0.22, config.snapDuration)
+        LayoutMotion.apply(
+            windows: windows,
+            frames: frames,
+            duration: duration,
+            animated: ReLaySettings.snapAnimateEnabled,
+            screenHeight: height
+        )
+
+        if windows.count >= 2 {
+            // Show the divider after the shared settle so it doesn't pop mid-chaos.
+            let delay = ReLaySettings.snapAnimateEnabled ? duration * 0.55 : 0.05
+            dividers.showLater(between: windows[0], and: windows[1], after: delay)
+        }
+        _ = screen
+    }
+
+    private func expandToFullscreen(_ window: AXUIElement, on screen: CGRect) {
+        guard screen != .zero else { return }
+        var pid: pid_t = 0
+        AXUIElementGetPid(window, &pid)
+        let bid = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? ""
+        guard WindowMutabilityPolicy.decision(for: bid) == .allow else { return }
+        let frame = LayoutFrameResolver.frame(for: .fullscreen, in: screen)
+        dividers.hideAll()
+        let height = NSScreen.screens.first?.frame.height ?? 0
+        LayoutMotion.apply(
+            windows: [window],
+            frames: [frame],
+            duration: max(0.22, config.snapDuration),
+            animated: ReLaySettings.snapAnimateEnabled,
+            screenHeight: height
+        )
+        Logger.log("expanded solo window to fullscreen", subsystem: "layout")
+    }
+
+    private func resetGestureState(preservingLayout layout: WindowLayoutState, floatingFrame: CGRect) {
         state = State()
         state.layout = layout
+        state.floatingFrame = floatingFrame
     }
 
     // MARK: - Screen resolution (NSScreen — not AX)
@@ -177,67 +416,149 @@ public final class WindowRuntime: EventTapCaptureDelegate {
                       width: vf.width, height: vf.height)
     }
 
+    /// Standard windows substantially overlapping `screen` (current Space).
+    /// Used to decide whether `.center` is offered as a swipe target.
+    static func visibleWindowCount(on screen: CGRect) -> Int {
+        guard !screen.isEmpty else { return 0 }
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        return WindowServerList.onScreenOrder().filter { entry in
+            guard entry.pid != ownPID else { return false }
+            let overlap = entry.bounds.intersection(screen)
+            return overlap.width > CompanionSelector.minOverlapEdge
+                && overlap.height > CompanionSelector.minOverlapEdge
+                && overlap.width * overlap.height > CompanionSelector.minOverlapArea
+        }.count
+    }
+
     // MARK: - Preview (AppKit only — no AX)
+    // Optional destination silhouette during a swipe ("where it will land").
+    // The old morphing ghost that traveled with the gesture is gone — it felt
+    // like a second window. Preview is off by default.
 
     private func setupPreview() {
-        previewOverlay    = makeOverlay(material: .selection,             borderOpacity: 0.3)
-        snapTargetOverlay = makeOverlay(material: .underWindowBackground, borderOpacity: 0.1)
+        snapTargetOverlay = makeOverlay(material: .hudWindow, borderOpacity: 0.35)
     }
 
     private func makeOverlay(material: NSVisualEffectView.Material, borderOpacity: CGFloat) -> NSWindow {
         let win = NSWindow(contentRect: .zero, styleMask: .borderless, backing: .buffered, defer: false)
-        win.level = .popUpMenu; win.backgroundColor = .clear
-        win.isOpaque = false; win.ignoresMouseEvents = true; win.hasShadow = false
+        win.isReleasedWhenClosed = false
+        win.level = .popUpMenu
+        win.backgroundColor = .clear
+        win.isOpaque = false
+        win.ignoresMouseEvents = true
+        win.hasShadow = false
+        win.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+
         let vfx = NSVisualEffectView()
-        vfx.material = material; vfx.blendingMode = .behindWindow; vfx.state = .active
+        vfx.material = material
+        vfx.blendingMode = .withinWindow
+        vfx.state = .active
         vfx.wantsLayer = true
-        vfx.layer?.cornerRadius = 12; vfx.layer?.borderWidth = 1.5
+        vfx.layer?.cornerRadius = 14
+        vfx.layer?.masksToBounds = true
+        vfx.layer?.borderWidth = 1.25
         vfx.layer?.borderColor = NSColor.white.withAlphaComponent(borderOpacity).cgColor
+
+        // Soft tint so the destination reads as a hint, not a second window.
+        let tint = NSView()
+        tint.wantsLayer = true
+        tint.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.12).cgColor
+        tint.translatesAutoresizingMaskIntoConstraints = false
+        vfx.addSubview(tint)
+        NSLayoutConstraint.activate([
+            tint.leadingAnchor.constraint(equalTo: vfx.leadingAnchor),
+            tint.trailingAnchor.constraint(equalTo: vfx.trailingAnchor),
+            tint.topAnchor.constraint(equalTo: vfx.topAnchor),
+            tint.bottomAnchor.constraint(equalTo: vfx.bottomAnchor),
+        ])
+
         win.contentView = vfx
         return win
     }
 
     private func updatePreview(from current: CGRect, to target: CGRect, progress: CGFloat) {
-        guard let overlay = previewOverlay, let snap = snapTargetOverlay else { return }
-        let cur = axToAppKit(current), tgt = axToAppKit(target)
-        if !snap.isVisible {
-            snap.setFrame(tgt, display: true); snap.alphaValue = 0; snap.orderFront(nil)
-            NSAnimationContext.runAnimationGroup { $0.duration = 0.15; snap.animator().alphaValue = 0.15 }
-        } else { snap.animator().setFrame(tgt, display: true) }
-        let active = CGRect(
-            x: cur.minX + (tgt.minX - cur.minX) * progress,
-            y: cur.minY + (tgt.minY - cur.minY) * progress,
-            width:  cur.width  + (tgt.width  - cur.width)  * progress,
-            height: cur.height + (tgt.height - cur.height) * progress
-        )
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.05
-            overlay.animator().setFrame(active, display: true)
-            overlay.animator().alphaValue = min(0.35, progress * 0.6)
+        _ = current
+        guard ReLaySettings.snapPreviewEnabled else {
+            if snapTargetOverlay?.isVisible == true {
+                dismissPreview(animated: false)
+            }
+            return
         }
-        if !overlay.isVisible { overlay.orderFront(nil) }
+        guard progress > 0, let snap = snapTargetOverlay else { return }
+
+        let tgt = axToAppKit(target)
+        let peakAlpha: CGFloat = 0.28
+
+        if !snap.isVisible {
+            snap.setFrame(tgt, display: false)
+            snap.alphaValue = 0
+            snap.orderFront(nil)
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.2
+                ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 1.0, 0.36, 1.0)
+                snap.animator().alphaValue = min(peakAlpha, progress * 0.45)
+            }
+            return
+        }
+
+        // Retarget smoothly when the snap slot changes mid-gesture.
+        let frameDelta = abs(snap.frame.minX - tgt.minX)
+            + abs(snap.frame.minY - tgt.minY)
+            + abs(snap.frame.width - tgt.width)
+            + abs(snap.frame.height - tgt.height)
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = frameDelta > 8 ? 0.16 : 0.08
+            ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.25, 0.1, 0.25, 1.0)
+            ctx.allowsImplicitAnimation = true
+            snap.animator().setFrame(tgt, display: true)
+            snap.animator().alphaValue = min(peakAlpha, 0.12 + progress * 0.2)
+        }
     }
 
     private func commitPreview(to frame: CGRect) {
-        guard let overlay = previewOverlay, overlay.isVisible else { return }
-        snapTargetOverlay?.alphaValue = 0; snapTargetOverlay?.orderOut(nil)
-        overlay.setFrame(axToAppKit(frame), display: true)
+        guard let snap = snapTargetOverlay else { return }
+
+        if !ReLaySettings.snapPreviewEnabled || !ReLaySettings.snapAnimateEnabled {
+            dismissPreview(animated: false)
+            return
+        }
+
+        let tgt = axToAppKit(frame)
+        if !snap.isVisible {
+            snap.setFrame(tgt, display: true)
+            snap.alphaValue = 0.2
+            snap.orderFront(nil)
+        } else {
+            snap.setFrame(tgt, display: true)
+        }
+
         NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = config.snapDuration
-            ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.8, 0.2, 1)
-            overlay.animator().alphaValue = 0
-        }, completionHandler: { overlay.orderOut(nil) })
+            ctx.duration = max(0.16, config.snapDuration * 0.85)
+            ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.16, 1.0, 0.3, 1.0)
+            snap.animator().alphaValue = 0
+        }, completionHandler: {
+            snap.orderOut(nil)
+            snap.alphaValue = 0
+        })
     }
 
     private func dismissPreview(animated: Bool) {
-        let dismissDuration = max(0.08, config.snapDuration * 0.55)
-        for win in [previewOverlay, snapTargetOverlay].compactMap({ $0 }) {
-            guard win.isVisible else { continue }
-            if animated {
-                NSAnimationContext.runAnimationGroup(
-                    { $0.duration = dismissDuration; win.animator().alphaValue = 0 },
-                    completionHandler: { win.orderOut(nil) })
-            } else { win.alphaValue = 0; win.orderOut(nil) }
+        guard let snap = snapTargetOverlay, snap.isVisible || snap.alphaValue > 0 else { return }
+        if animated && ReLaySettings.snapAnimateEnabled {
+            let dismissDuration = max(0.1, config.snapDuration * 0.5)
+            NSAnimationContext.runAnimationGroup(
+                { ctx in
+                    ctx.duration = dismissDuration
+                    ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.4, 0.0, 0.2, 1.0)
+                    snap.animator().alphaValue = 0
+                },
+                completionHandler: {
+                    snap.orderOut(nil)
+                }
+            )
+        } else {
+            snap.alphaValue = 0
+            snap.orderOut(nil)
         }
     }
 
@@ -282,12 +603,14 @@ enum WindowLayoutState: Hashable, CaseIterable {
 
     // Left column
     case leftHalf           // 50% left
+    case leftTwoThirds      // 67% left — between half and fullscreen
     case leftThird          // 33% left, full height
     case leftTopSixth       // 33% left, top 50%
     case leftBottomSixth    // 33% left, bottom 50%
 
     // Right column
     case rightHalf          // 50% right
+    case rightTwoThirds     // 67% right — between half and fullscreen
     case rightThird         // 33% right, full height
     case rightTopSixth      // 33% right, top 50%
     case rightBottomSixth   // 33% right, bottom 50%
@@ -309,8 +632,24 @@ class LayoutTransitionGraph {
 
     init() { buildTable() }
 
-    func nextState(from state: WindowLayoutState, moving direction: GestureDirection) -> WindowLayoutState? {
-        return table[TransitionKey(state: state, direction: direction)]
+    /// - Parameter allowCenter: When false (other windows share the screen),
+    ///   swipe targets never land on `.center` — floating/fullscreen jump
+    ///   straight between each other. Center remains reachable only for a
+    ///   solo window, and exits from an existing center layout still work.
+    func nextState(
+        from state: WindowLayoutState,
+        moving direction: GestureDirection,
+        allowCenter: Bool = true
+    ) -> WindowLayoutState? {
+        let next = table[TransitionKey(state: state, direction: direction)]
+        guard !allowCenter, next == .center else { return next }
+        // Skip center when tiling with neighbors.
+        switch (state, direction) {
+        case (.floating, .up):
+            return .fullscreen
+        default:
+            return nil
+        }
     }
 
     private func buildTable() {
@@ -334,32 +673,42 @@ class LayoutTransitionGraph {
         // Third → half (pull back; edge resist in other direction)
         add(.leftThird,  .right, .leftHalf)
         add(.rightThird, .left,  .rightHalf)
+        // Two-thirds ↔ half / cross
+        add(.leftTwoThirds,  .left,  .leftHalf)
+        add(.leftTwoThirds,  .right, .rightHalf)
+        add(.rightTwoThirds, .right, .rightHalf)
+        add(.rightTwoThirds, .left,  .leftHalf)
         // Cross-column: jump sixths across the screen
         add(.leftTopSixth,    .right, .rightTopSixth)
         add(.leftBottomSixth, .right, .rightBottomSixth)
         add(.rightTopSixth,   .left,  .leftTopSixth)
         add(.rightBottomSixth,.left,  .leftBottomSixth)
 
-        // Vertical — swipe up rotates: floating → center → fullscreen → center → …
+        // Vertical — floating → center → fullscreen (and wrap)
         // (never enters native macOS fullscreen; fullscreen here = fills usable screen area)
         add(.floating,    .up, .center)
         add(.center,      .up, .fullscreen)
-        add(.fullscreen,  .up, .center)   // wraps back — keeps toggling between the two
-        // Column/sixth states grow to fullscreen
-        for state in [WindowLayoutState.leftHalf, .rightHalf,
-                      .leftThird, .rightThird,
+        add(.fullscreen,  .up, .center)
+        // Half grows to two-thirds, then to fullscreen
+        add(.leftHalf,       .up, .leftTwoThirds)
+        add(.rightHalf,      .up, .rightTwoThirds)
+        add(.leftTwoThirds,  .up, .fullscreen)
+        add(.rightTwoThirds, .up, .fullscreen)
+        // Other column/sixth states still jump to fullscreen
+        for state in [WindowLayoutState.leftThird, .rightThird,
                       .leftTopSixth, .leftBottomSixth,
                       .rightTopSixth, .rightBottomSixth] {
             add(state, .up, .fullscreen)
         }
 
         // Vertical — swipe down only ever shrinks, never grows
-        // fullscreen and center collapse to floating; floating → minimize (in reducer)
-        add(.fullscreen, .down, .floating)
-        add(.center,     .down, .floating)
-        // Half columns step down to third before minimizing
-        add(.leftHalf,  .down, .leftThird)
-        add(.rightHalf, .down, .rightThird)
+        // fullscreen → two-thirds → half → third → minimize
+        add(.fullscreen,     .down, .leftTwoThirds)
+        add(.leftTwoThirds,  .down, .leftHalf)
+        add(.rightTwoThirds, .down, .rightHalf)
+        add(.center,         .down, .floating)
+        add(.leftHalf,       .down, .leftThird)
+        add(.rightHalf,      .down, .rightThird)
         // leftThird/rightThird → minimize (handled in reducer, no table entry needed)
         // Sixths collapse to floating
         for state in [WindowLayoutState.leftTopSixth, .leftBottomSixth,
