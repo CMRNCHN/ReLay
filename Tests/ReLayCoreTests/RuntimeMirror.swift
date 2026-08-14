@@ -31,7 +31,8 @@ final class RuntimeMirror {
         cancelThreshold: 25,
         actionThreshold: 100,
         flickVelocity: 800,
-        snapDuration: 0.22
+        snapDuration: 0.22,
+        layoutGap: 8
     )
 
     // Recorded effects
@@ -40,7 +41,7 @@ final class RuntimeMirror {
     private(set) var unminimized: [pid_t] = []
     private(set) var haptics = 0
     /// Peers stashed when entering fullscreen (mirror of WindowRuntime).
-    private var minimizedForFullscreen: [pid_t] = []
+    private var minimizedForFullscreen: [(pid: pid_t, frame: CGRect)] = []
 
     // Mirrored runtime state
     private(set) var state = State()
@@ -184,7 +185,7 @@ final class RuntimeMirror {
 
     private func minimizeOtherWindows(excluding primary: pid_t) {
         let others = frames.keys.filter { $0 != primary }.sorted()
-        var stashed: [pid_t] = []
+        var stashed: [(pid: pid_t, frame: CGRect)] = []
         for pid in others {
             let frame = frames[pid] ?? .zero
             let overlap = frame.intersection(screen)
@@ -195,7 +196,7 @@ final class RuntimeMirror {
             let bundleID = bundleIDs[pid] ?? "com.example.app"
             guard WindowMutabilityPolicy.decision(for: bundleID) == .allow else { continue }
             minimized.append(pid)
-            stashed.append(pid)
+            stashed.append((pid: pid, frame: frame))
         }
         minimizedForFullscreen = stashed
     }
@@ -207,14 +208,21 @@ final class RuntimeMirror {
             applyCompanionLayouts(primary: primary, layout: layout)
             return
         }
-        let companionFrames = LayoutFrameResolver.companionFrames(for: layout, count: peers.count, in: screen)
+        let leftover = LayoutFrameResolver.companionFrames(for: layout, count: 1, in: screen).first
         for (index, peer) in peers.enumerated() {
-            unminimized.append(peer)
-            // Remove from minimized recorder if present (restored).
-            minimized.removeAll { $0 == peer }
-            if index < companionFrames.count {
-                writes.append(Write(window: peer, frame: companionFrames[index]))
-                frames[peer] = companionFrames[index]
+            unminimized.append(peer.pid)
+            minimized.removeAll { $0 == peer.pid }
+            let target: CGRect?
+            if index == 0, let leftover, AXWindowOps.isWritableFrame(leftover) {
+                target = leftover
+            } else if AXWindowOps.isWritableFrame(peer.frame) {
+                target = peer.frame
+            } else {
+                target = nil
+            }
+            if let target {
+                writes.append(Write(window: peer.pid, frame: target))
+                frames[peer.pid] = target
             }
         }
     }

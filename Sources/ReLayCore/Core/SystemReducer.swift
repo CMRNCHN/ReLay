@@ -9,6 +9,7 @@ public struct Config {
     public let actionThreshold: CGFloat
     public let flickVelocity:   CGFloat
     public let snapDuration:    TimeInterval
+    public let layoutGap:       CGFloat
 
     public static func load() -> Config {
         Config(
@@ -16,7 +17,8 @@ public struct Config {
             cancelThreshold: ReLaySettings.cancelThreshold,
             actionThreshold: ReLaySettings.actionThreshold,
             flickVelocity:   ReLaySettings.flickVelocity,
-            snapDuration:    ReLaySettings.snapDuration
+            snapDuration:    ReLaySettings.snapDuration,
+            layoutGap:       ReLaySettings.layoutPadding
         )
     }
 }
@@ -126,7 +128,7 @@ func reduce(_ state: State, _ input: Input, config: Config = .load()) -> State {
                 s.shouldMinimize = true
                 s.hasCommitted   = true
             } else {
-                s = commitSnap(s, input: input)
+                s = commitSnap(s, input: input, config: config)
             }
         } else {
             return cleared(s)
@@ -178,11 +180,11 @@ private func updateSnapPreview(_ s: State, input: Input, config: Config) -> Stat
     // End frame only — WindowRuntime interpolates once using `progress`.
     out.targetFrame = nextLayout == .floating && !out.floatingFrame.isEmpty
         ? out.floatingFrame
-        : LayoutFrameResolver.frame(for: nextLayout, in: input.screenFrame)
+        : LayoutFrameResolver.frame(for: nextLayout, in: input.screenFrame, gap: config.layoutGap)
     return out
 }
 
-private func commitSnap(_ s: State, input: Input) -> State {
+private func commitSnap(_ s: State, input: Input, config: Config) -> State {
     var out = s
     guard let dir = GestureDirection(effectiveX: out.accumulatedX, effectiveY: out.accumulatedY),
           let nextLayout = transitions.nextState(from: out.layout, moving: dir, allowCenter: out.allowCenter)
@@ -192,7 +194,7 @@ private func commitSnap(_ s: State, input: Input) -> State {
     out.layout       = nextLayout
     out.targetFrame  = nextLayout == .floating && !out.floatingFrame.isEmpty
         ? out.floatingFrame
-        : LayoutFrameResolver.frame(for: nextLayout, in: input.screenFrame)
+        : LayoutFrameResolver.frame(for: nextLayout, in: input.screenFrame, gap: config.layoutGap)
     out.progress     = 1
     out.hasCommitted = true
     return out

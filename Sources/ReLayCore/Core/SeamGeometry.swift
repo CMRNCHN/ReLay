@@ -152,4 +152,148 @@ enum SeamGeometry {
             return (top, bottom)
         }
     }
+
+    // MARK: - Seam-line resize (up to 4 tiled windows)
+
+    /// Windows whose edge sits on `center` at session start.
+    /// - leading: left of a vertical seam / top of a horizontal seam
+    /// - trailing: right / bottom
+    static func participants(
+        among frames: [CGRect],
+        axis: SeamAxis,
+        center: CGFloat,
+        gap: CGFloat = LinkedResize.defaultGap,
+        tolerance: CGFloat = LinkedResize.shareTolerance
+    ) -> (leading: [Int], trailing: [Int]) {
+        let half = gap / 2
+        var leading: [Int] = []
+        var trailing: [Int] = []
+        for (i, frame) in frames.enumerated() {
+            switch axis {
+            case .vertical:
+                if abs(frame.maxX - (center - half)) <= tolerance {
+                    leading.append(i)
+                } else if abs(frame.minX - (center + half)) <= tolerance {
+                    trailing.append(i)
+                }
+            case .horizontal:
+                if abs(frame.maxY - (center - half)) <= tolerance {
+                    leading.append(i)
+                } else if abs(frame.minY - (center + half)) <= tolerance {
+                    trailing.append(i)
+                }
+            }
+        }
+        return (leading, trailing)
+    }
+
+    /// Seam center implied by a primary window's live edge after macOS resized it.
+    static func center(
+        fromPrimary primary: CGRect,
+        edge: WindowEdge,
+        gap: CGFloat = LinkedResize.defaultGap
+    ) -> CGFloat {
+        let half = gap / 2
+        switch edge {
+        case .right:  return primary.maxX + half
+        case .left:   return primary.minX - half
+        case .bottom: return primary.maxY + half
+        case .top:    return primary.minY - half
+        }
+    }
+
+    static func axis(for edge: WindowEdge) -> SeamAxis {
+        switch edge {
+        case .left, .right: return .vertical
+        case .top, .bottom: return .horizontal
+        }
+    }
+
+    /// Move an entire seam line. Every window that touched `startCenter` at
+    /// session start is resized together — so a 2×2 center drag keeps the
+    /// cross aligned (TL+BL vs TR+BR), not just the primary's direct neighbor.
+    ///
+    /// Returns nil if the move would crush any participant below `minSize`.
+    static func applySeamLine(
+        frames: [CGRect],
+        axis: SeamAxis,
+        startCenter: CGFloat,
+        newCenter: CGFloat,
+        gap: CGFloat = LinkedResize.defaultGap,
+        minSize: CGFloat = LinkedResize.minNeighborSize,
+        tolerance: CGFloat = LinkedResize.shareTolerance
+    ) -> [CGRect]? {
+        let sides = participants(
+            among: frames, axis: axis, center: startCenter, gap: gap, tolerance: tolerance
+        )
+        guard !sides.leading.isEmpty, !sides.trailing.isEmpty else { return nil }
+
+        let half = gap / 2
+        var center = newCenter
+
+        // Joint clamp so every participant stays ≥ minSize.
+        for i in sides.leading {
+            let f = frames[i]
+            switch axis {
+            case .vertical:
+                center = max(center, f.minX + minSize + half)
+            case .horizontal:
+                center = max(center, f.minY + minSize + half)
+            }
+        }
+        for i in sides.trailing {
+            let f = frames[i]
+            switch axis {
+            case .vertical:
+                center = min(center, f.maxX - minSize - half)
+            case .horizontal:
+                center = min(center, f.maxY - minSize - half)
+            }
+        }
+
+        // If clamps crossed, the move is impossible.
+        for i in sides.leading {
+            let f = frames[i]
+            switch axis {
+            case .vertical where center - half - f.minX < minSize: return nil
+            case .horizontal where center - half - f.minY < minSize: return nil
+            default: break
+            }
+        }
+        for i in sides.trailing {
+            let f = frames[i]
+            switch axis {
+            case .vertical where f.maxX - (center + half) < minSize: return nil
+            case .horizontal where f.maxY - (center + half) < minSize: return nil
+            default: break
+            }
+        }
+
+        var result = frames
+        switch axis {
+        case .vertical:
+            let leftMax = (center - half).rounded()
+            let rightMin = (center + half).rounded()
+            for i in sides.leading {
+                let f = frames[i]
+                result[i] = CGRect(x: f.minX, y: f.minY, width: leftMax - f.minX, height: f.height)
+            }
+            for i in sides.trailing {
+                let f = frames[i]
+                result[i] = CGRect(x: rightMin, y: f.minY, width: f.maxX - rightMin, height: f.height)
+            }
+        case .horizontal:
+            let topMax = (center - half).rounded()
+            let bottomMin = (center + half).rounded()
+            for i in sides.leading {
+                let f = frames[i]
+                result[i] = CGRect(x: f.minX, y: f.minY, width: f.width, height: topMax - f.minY)
+            }
+            for i in sides.trailing {
+                let f = frames[i]
+                result[i] = CGRect(x: f.minX, y: bottomMin, width: f.width, height: f.maxY - bottomMin)
+            }
+        }
+        return result
+    }
 }

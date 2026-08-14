@@ -23,8 +23,8 @@ enum CompanionSelector {
 
     /// A window must show at least this much of itself on the target screen to
     /// be considered — filters palettes, inspectors and off-screen windows.
-    static let minOverlapEdge: CGFloat = 120
-    static let minOverlapArea: CGFloat = 40_000
+    static let minOverlapEdge: CGFloat = WindowEligibility.minWidth * 0.9
+    static let minOverlapArea: CGFloat = 90_000
 
     /// The frontmost eligible window — the one the user was most recently
     /// looking at. Picking by area instead selects whatever happens to be
@@ -44,12 +44,9 @@ enum CompanionSelector {
         on screen: CGRect,
         excludingBundleIDs excluded: Set<String> = []
     ) -> Bool {
-        let overlap = candidate.frame.intersection(screen)
-        guard overlap.width > minOverlapEdge,
-              overlap.height > minOverlapEdge,
-              overlap.width * overlap.height > minOverlapArea
-        else { return false }
         guard !excluded.contains(candidate.bundleID) else { return false }
-        return WindowMutabilityPolicy.decision(for: candidate.bundleID) == .allow
+        guard WindowEligibility.isMutableApp(bundleID: candidate.bundleID) else { return false }
+        // Substantial document footprint — not a menu-bar dropdown or palette.
+        return WindowEligibility.isSubstantialFrame(candidate.frame, on: screen)
     }
 }

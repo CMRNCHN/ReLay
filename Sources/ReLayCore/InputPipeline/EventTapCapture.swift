@@ -39,6 +39,7 @@ final class EventTapCapture {
     private var mouseDownMonitor: Any?
     private var mouseDragMonitor: Any?
     private var mouseUpMonitor: Any?
+    private var localMouseMonitor: Any?
     private var isRunning = false
     private var titleBarGestureActive = false
     private var edgeResizeListening = false
@@ -77,6 +78,7 @@ final class EventTapCapture {
     }
 
     private func installMouseMonitors() {
+        // Global: other apps. Local: ReLay's own windows (global monitors skip those).
         mouseDownMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
             self?.handleGlobalMouse(type: .leftMouseDown, event: event)
         }
@@ -86,15 +88,33 @@ final class EventTapCapture {
         mouseUpMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp) { [weak self] event in
             self?.handleGlobalMouse(type: .leftMouseUp, event: event)
         }
+        localMouseMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]
+        ) { [weak self] event in
+            guard let self else { return event }
+            switch event.type {
+            case .leftMouseDown:
+                self.handleGlobalMouse(type: .leftMouseDown, event: event)
+            case .leftMouseDragged:
+                self.handleGlobalMouse(type: .leftMouseDragged, event: event)
+            case .leftMouseUp:
+                self.handleGlobalMouse(type: .leftMouseUp, event: event)
+            default:
+                break
+            }
+            return event
+        }
     }
 
     private func removeMouseMonitors() {
         if let mouseDownMonitor { NSEvent.removeMonitor(mouseDownMonitor) }
         if let mouseDragMonitor { NSEvent.removeMonitor(mouseDragMonitor) }
         if let mouseUpMonitor { NSEvent.removeMonitor(mouseUpMonitor) }
+        if let localMouseMonitor { NSEvent.removeMonitor(localMouseMonitor) }
         mouseDownMonitor = nil
         mouseDragMonitor = nil
         mouseUpMonitor = nil
+        localMouseMonitor = nil
     }
 
     // MARK: - Event handling

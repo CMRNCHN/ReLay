@@ -8,7 +8,8 @@ final class SnapGestureReducerTests: XCTestCase {
 
     private let screen = CGRect(x: 0, y: 25, width: 1512, height: 920)
     private let config = Config(lockThreshold: 20, cancelThreshold: 25,
-                                actionThreshold: 100, flickVelocity: 800, snapDuration: 0.22)
+                                actionThreshold: 100, flickVelocity: 800, snapDuration: 0.22,
+                                layoutGap: 8)
     private lazy var window: AXUIElement = AXUIElementCreateApplication(4242)
 
     private func input(_ dx: CGFloat, _ dy: CGFloat, _ phase: WindowIntent.Phase,

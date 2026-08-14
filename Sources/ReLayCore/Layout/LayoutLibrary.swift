@@ -48,7 +48,7 @@ public final class LayoutLibrary: NSWindowController {
         self.triggerWindow = triggerWindow
         currentWindows = makeWindowItems(triggerWindow: triggerWindow)
 
-        // Spatial suggestion — picks best template, slots stay empty
+        // Spatial suggestion — picks best template, then role-based auto-fill
         let screen = screenForWindow(triggerWindow)
         let suggestion = LayoutSuggestionEngine.rank(context: LayoutSuggestionEngine.Context(
             windows: currentWindows,
@@ -63,13 +63,20 @@ public final class LayoutLibrary: NSWindowController {
         selectedTemplateID = suggestion?.template.id
             ?? history.getRecentTemplateIDs().first
             ?? LayoutTemplate.all.first!.id
-        slotAssignments = [:]
+        let template = templateByID(selectedTemplateID) ?? LayoutTemplate.all[0]
+        slotAssignments = LayoutAssignment.autoFill(template: template, windows: currentWindows)
 
         buildUI()
         center()
         animateIn()
         isPresented = true
-        NSApp.activate(ignoringOtherApps: false)
+        // Activate so Apply / keyboard reach the panel reliably.
+        NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
+        Logger.log(
+            "library present template=\(selectedTemplateID) windows=\(currentWindows.count) slots=\(slotAssignments.count)",
+            subsystem: "layout"
+        )
     }
 
     public func dismiss() {
@@ -96,7 +103,10 @@ public final class LayoutLibrary: NSWindowController {
         let screen = screenForWindow(triggerWindow)
         guard screen != .zero else { return }
 
-        let windows = AXWindowOps.allVisible()
+        let windows = LayoutAssignment.orderForQuickApply(
+            windows: AXWindowOps.allVisible(),
+            trigger: triggerWindow
+        )
         applyFrames(template: template, windows: windows, screen: screen)
 
         history.recordApply(event: AppliedLayoutEvent(
@@ -260,9 +270,9 @@ public final class LayoutLibrary: NSWindowController {
 
     private func selectTemplate(_ id: String) {
         selectedTemplateID = id
-        slotAssignments = [:]
         guard let template = templateByID(id) else { return }
-        canvasView?.switchTemplate(template)
+        slotAssignments = LayoutAssignment.autoFill(template: template, windows: currentWindows)
+        canvasView?.switchTemplate(template, assignments: slotAssignments)
         templateStrip?.setSelected(id)
     }
 
@@ -281,12 +291,57 @@ public final class LayoutLibrary: NSWindowController {
 
     private func applyLayout() {
         guard let template = templateByID(selectedTemplateID) else { return }
-        let screen = screenForWindow(triggerWindow)
-        guard screen != .zero else { dismiss(); return }
+        let screen = resolveScreen()
+        guard screen != .zero else {
+            Logger.log("layout apply aborted — no usable screen", subsystem: "layout")
+            dismiss()
+            return
+        }
 
-        for slot in template.slots {
-            guard let bundleID = slotAssignments[slot.id], let win = axWindow(forBundleID: bundleID) else { continue }
-            AXWindowOps.setFrame(win, frameForSlot(slot, in: screen))
+        var assignments = slotAssignments
+        if assignments.isEmpty {
+            assignments = LayoutAssignment.autoFill(template: template, windows: currentWindows)
+        }
+
+        var windows: [AXUIElement] = []
+        var frames: [CGRect] = []
+        var skipped = 0
+
+        if assignments.isEmpty {
+            // Last resort: tile whatever AX can see, trigger-first.
+            let visible = LayoutAssignment.orderForQuickApply(
+                windows: AXWindowOps.allVisible(),
+                trigger: triggerWindow
+            )
+            for (i, slot) in template.slots.enumerated() where i < visible.count {
+                let win = visible[i]
+                guard WindowEligibility.isTileableWindow(win, on: screen) else { skipped += 1; continue }
+                windows.append(win)
+                frames.append(LayoutAssignment.frameForSlot(slot, in: screen))
+            }
+        } else {
+            for slot in template.slots {
+                guard let bundleID = assignments[slot.id] else { skipped += 1; continue }
+                guard WindowMutabilityPolicy.decision(for: bundleID) == .allow else { skipped += 1; continue }
+                guard let win = axWindow(forBundleID: bundleID),
+                      WindowEligibility.isTileableWindow(win, on: screen)
+                else { skipped += 1; continue }
+                windows.append(win)
+                frames.append(LayoutAssignment.frameForSlot(slot, in: screen))
+            }
+        }
+
+        let applied = windows.count
+        if applied > 0 {
+            let height = NSScreen.screens.first?.frame.height ?? 0
+            LayoutMotion.apply(
+                windows: windows,
+                frames: frames,
+                duration: 0.01,
+                animated: false,
+                screenHeight: height
+            )
+            NotificationCenter.default.post(name: .relayLayoutApplied, object: nil)
         }
 
         history.recordApply(event: AppliedLayoutEvent(
@@ -298,7 +353,10 @@ public final class LayoutLibrary: NSWindowController {
             displayCount: NSScreen.screens.count
         ))
 
-        Logger.log("layout applied template=\(template.id) windows=\(AXWindowOps.allVisible().count)", subsystem: "layout")
+        Logger.log(
+            "layout applied template=\(template.id) applied=\(applied) skipped=\(skipped) screen=\(Int(screen.width))x\(Int(screen.height))",
+            subsystem: "layout"
+        )
 
         dismiss()
     }
@@ -357,29 +415,41 @@ public final class LayoutLibrary: NSWindowController {
     }
 
     private func axWindow(forBundleID id: String) -> AXUIElement? {
+        // Prefer the element captured at present() — same Space, same window.
+        if let item = currentWindows.first(where: { $0.bundleID == id }) {
+            return item.element
+        }
         guard let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == id }) else { return nil }
         let axApp = AXUIElementCreateApplication(app.processIdentifier)
         var ref: CFTypeRef?
         guard AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &ref) == .success,
               let windows = ref as? [AXUIElement] else { return nil }
-        return windows.first { win in
-            var v: CFTypeRef?
-            return !(AXUIElementCopyAttributeValue(win, kAXMinimizedAttribute as CFString, &v) == .success && (v as? Bool) == true)
-        } ?? windows.first
+        return windows.first(where: { AXWindowOps.isStandardWindow($0) })
+            ?? windows.first
+    }
+
+    private func resolveScreen() -> CGRect {
+        if let tw = triggerWindow, let frame = AXWindowOps.frame(tw), !frame.isEmpty {
+            let screen = WindowRuntime.usableScreen(containing: frame)
+            if screen != .zero { return screen }
+        }
+        for item in currentWindows {
+            if let frame = AXWindowOps.frame(item.element), !frame.isEmpty {
+                let screen = WindowRuntime.usableScreen(containing: frame)
+                if screen != .zero { return screen }
+            }
+        }
+        return WindowRuntime.mainUsableScreen()
     }
 
     private func makeWindowItems(triggerWindow: AXUIElement?) -> [LayoutWindowItem] {
         var items: [LayoutWindowItem] = []
         for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
             let axApp = AXUIElementCreateApplication(app.processIdentifier)
-            AXUIElementSetAttributeValue(axApp, "AXEnhancedUserInterface" as CFString, true as CFTypeRef)
             var ref: CFTypeRef?
             guard AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &ref) == .success,
                   let windows = ref as? [AXUIElement] else { continue }
-            for win in windows {
-                var mv: CFTypeRef?
-                if AXUIElementCopyAttributeValue(win, kAXMinimizedAttribute as CFString, &mv) == .success,
-                   (mv as? Bool) == true { continue }
+            for win in windows where AXWindowOps.isStandardWindow(win) {
                 let title = AXWindowOps.title(win)
                 let role  = WindowRoleClassifier.classify(appName: app.localizedName, windowTitle: title)
                 var isActive = false
@@ -405,22 +475,36 @@ public final class LayoutLibrary: NSWindowController {
     }
 
     private func screenForWindow(_ window: AXUIElement?) -> CGRect {
-        WindowRuntime.usableScreen(containing: window.flatMap { AXWindowOps.frame($0) } ?? .zero)
-    }
-
-    private func frameForSlot(_ slot: LayoutTemplate.Slot, in screen: CGRect) -> CGRect {
-        CGRect(
-            x: screen.origin.x + slot.rect.origin.x * screen.width,
-            y: screen.origin.y + slot.rect.origin.y * screen.height,
-            width: slot.rect.width * screen.width,
-            height: slot.rect.height * screen.height
-        )
+        if let window, let frame = AXWindowOps.frame(window), !frame.isEmpty {
+            return WindowRuntime.usableScreen(containing: frame)
+        }
+        return WindowRuntime.mainUsableScreen()
     }
 
     private func applyFrames(template: LayoutTemplate, windows: [AXUIElement], screen: CGRect) {
+        var movable: [AXUIElement] = []
+        var frames: [CGRect] = []
+        var skipped = 0
         for (i, slot) in template.slots.enumerated() where i < windows.count {
-            AXWindowOps.setFrame(windows[i], frameForSlot(slot, in: screen))
+            let win = windows[i]
+            let bundleID = AXWindowOps.bundleID(for: win)
+            guard WindowMutabilityPolicy.decision(for: bundleID) == .allow else { skipped += 1; continue }
+            movable.append(win)
+            frames.append(LayoutAssignment.frameForSlot(slot, in: screen))
         }
+        let applied = movable.count
+        if applied > 0 {
+            let height = NSScreen.screens.first?.frame.height ?? 0
+            LayoutMotion.apply(
+                windows: movable,
+                frames: frames,
+                duration: 0.01,
+                animated: false,
+                screenHeight: height
+            )
+            NotificationCenter.default.post(name: .relayLayoutApplied, object: nil)
+        }
+        Logger.log("quickApply template=\(template.id) applied=\(applied) skipped=\(skipped)", subsystem: "layout")
     }
 
 }

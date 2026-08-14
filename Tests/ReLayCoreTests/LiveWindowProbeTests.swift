@@ -57,6 +57,45 @@ final class LiveWindowProbeTests: XCTestCase {
 
         let own = Bundle.main.bundleIdentifier.map { Set([$0]) } ?? []
         log("")
+        log("=== WindowEligibility (tile vs ignore) ===")
+        for (i, win) in windows.enumerated() {
+            let bundle = AXWindowOps.bundleID(for: win)
+            guard let frame = AXWindowOps.frame(win) else { continue }
+            var pid: pid_t = 0
+            AXUIElementGetPid(win, &pid)
+            let regular = WindowEligibility.isRegularApp(pid: pid)
+            let substantial = WindowEligibility.isSubstantialFrame(frame, on: screen)
+            let tileable = WindowEligibility.isTileableWindow(win, on: screen)
+            let resizable = AXWindowOps.isResizable(win).map { $0 ? "yes" : "NO " } ?? "??? "
+            let verdict = tileable ? "TILE" : "IGNORE"
+            log(String(format: "%3d  %-6@  regular=%@  substantial=%@  resizable=%@  %@  %@",
+                       i,
+                       verdict as NSString,
+                       (regular ? "yes" : "NO ") as NSString,
+                       (substantial ? "yes" : "NO ") as NSString,
+                       resizable as NSString,
+                       bundle as NSString,
+                       AXWindowOps.title(win) as NSString))
+        }
+
+        log("")
+        log("CG layer-0 entries that pass / fail CG prefilter:")
+        for (i, entry) in order.enumerated() {
+            let ok = WindowEligibility.isTileableCGEntry(
+                pid: entry.pid, bounds: entry.bounds, on: screen
+            )
+            let app = NSRunningApplication(processIdentifier: entry.pid)
+            let name = app?.localizedName ?? "?"
+            let policy = app.map { "\($0.activationPolicy.rawValue)" } ?? "?"
+            log(String(format: "  %3d  %-6@  policy=%@  %@  %@",
+                       i,
+                       (ok ? "TILE" : "IGNORE") as NSString,
+                       policy as NSString,
+                       name as NSString,
+                       "\(entry.bounds)" as NSString))
+        }
+
+        log("")
         log("after a leftHalf snap of window[0], bestCompanion would pick:")
         let excludingPrimary = candidates.filter { $0.id != 0 }
         if let pick = CompanionSelector.best(from: excludingPrimary, on: screen, excludingBundleIDs: own) {

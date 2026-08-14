@@ -53,9 +53,13 @@ enum LayoutFrameResolver {
         }
     }
 
+    /// Never stack more than this many companions into one leftover region.
+    static let maxStackedCompanions = 2
+
     /// Frames for other windows that should fill the leftover region after a
     /// snap. Halves → opposite half; thirds → remaining two-thirds. Other
-    /// layouts → none. Multiple companions are stacked top-to-bottom.
+    /// layouts → none. At most two companions are stacked; further peers must
+    /// be restored to their own saved frames (see WindowRuntime).
     static func companionFrames(
         for primary: WindowLayoutState,
         count: Int,
@@ -65,7 +69,13 @@ enum LayoutFrameResolver {
         guard count > 0,
               let region = complementaryRegion(for: primary, in: screen, gap: gap)
         else { return [] }
-        return splitVertically(region, into: count, gap: gap)
+        let maxByHeight = max(
+            1,
+            Int((region.height + gap) / (AXWindowOps.minWritableHeight + gap))
+        )
+        let capped = min(count, maxStackedCompanions, maxByHeight)
+        let frames = splitVertically(region, into: capped, gap: gap)
+        return frames.filter { AXWindowOps.isWritableFrame($0) }
     }
 
     /// Which layout a window is *actually* in, judged from its frame. The

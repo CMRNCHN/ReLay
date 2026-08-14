@@ -17,8 +17,15 @@ public final class WindowRuntime: EventTapCaptureDelegate {
     private var edgeResizeActive = false
     private let dividers = DividerSliderController()
     private let autoLayout = AutoLayoutWatcher()
+
+    /// Peer stashed when entering fullscreen — frame is the pre-minimize geometry.
+    private struct StashedPeer {
+        let window: AXUIElement
+        let frame: CGRect
+    }
+
     /// Windows we minimized when entering fullscreen — restored on the way back down.
-    private var minimizedForFullscreen: [AXUIElement] = []
+    private var minimizedForFullscreen: [StashedPeer] = []
 
     public init(config: Config = .load()) {
         self.config  = config
@@ -31,15 +38,42 @@ public final class WindowRuntime: EventTapCaptureDelegate {
             name: ReLaySettings.settingsChanged,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleLayoutLibraryApplied),
+            name: .relayLayoutApplied,
+            object: nil
+        )
     }
 
     @objc private func reloadConfig() {
         config = Config.load()
+        syncAutoLayout()
+    }
+
+    @objc private func handleLayoutLibraryApplied() {
+        // Long enough that Stage Manager / panel dismiss flicker can't undo Apply.
+        autoLayout.suspend(for: 3.0)
     }
 
     public func start() throws {
         dividers.hideAll()
         try capture.start()
+        syncAutoLayout()
+    }
+
+    public func stop() {
+        capture.stop()
+        autoLayout.stop()
+        dividers.hideAll()
+    }
+
+    private func syncAutoLayout() {
+        autoLayout.stop()
+        guard ReLaySettings.autoLayoutEnabled else {
+            Logger.log("auto-layout watcher off", subsystem: "layout")
+            return
+        }
         autoLayout.start(
             onApply: { [weak self] windows, frames, screen in
                 self?.applyAutoLayout(windows: windows, frames: frames, screen: screen)
@@ -48,12 +82,7 @@ public final class WindowRuntime: EventTapCaptureDelegate {
                 self?.expandToFullscreen(window, on: screen)
             }
         )
-    }
-
-    public func stop() {
-        capture.stop()
-        autoLayout.stop()
-        dividers.hideAll()
+        Logger.log("auto-layout watcher on", subsystem: "layout")
     }
 
     // MARK: - Capture → Reduce → Policy → Execute
@@ -80,7 +109,9 @@ public final class WindowRuntime: EventTapCaptureDelegate {
         // placed by us as somebody else's companion.
         if intent.phase == .began, let window {
             activeBundleID = AXWindowOps.bundleID(for: window)
-            state.layout = LayoutFrameResolver.layout(matching: startFrame, in: screen)
+            state.layout = LayoutFrameResolver.layout(
+                matching: startFrame, in: screen, gap: ReLaySettings.layoutPadding
+            )
         }
         let allowCenter = intent.phase == .began
             ? Self.visibleWindowCount(on: screen) <= 1
@@ -169,7 +200,9 @@ public final class WindowRuntime: EventTapCaptureDelegate {
 
                 if Self.shouldMinimizeOthers(from: prev.layout, to: curr.layout) {
                     dividers.hideAll()
-                    minimizedForFullscreen = peers
+                    minimizedForFullscreen = peers.map { peer in
+                        StashedPeer(window: peer, frame: AXWindowOps.frame(peer) ?? .zero)
+                    }
                     for peer in peers {
                         let ok = AXWindowOps.minimize(peer)
                         if !ok {
@@ -220,7 +253,9 @@ public final class WindowRuntime: EventTapCaptureDelegate {
     private func applyCompanionLayouts(primary: AXUIElement, layout: WindowLayoutState, screen: CGRect) {
         guard screen != .zero else { return }
         guard let companion = bestCompanion(excluding: primary, on: screen) else { return }
-        let frames = LayoutFrameResolver.companionFrames(for: layout, count: 1, in: screen)
+        let frames = LayoutFrameResolver.companionFrames(
+            for: layout, count: 1, in: screen, gap: ReLaySettings.layoutPadding
+        )
         guard let frame = frames.first else { return }
         let height = NSScreen.screens.first?.frame.height ?? 0
         LayoutMotion.apply(
@@ -245,7 +280,9 @@ public final class WindowRuntime: EventTapCaptureDelegate {
         previous == .fullscreen && next != .fullscreen
     }
 
-    /// Unminimize windows stashed for fullscreen and seat them in the leftover region.
+    /// Unminimize stashed peers. The frontmost fills the leftover slot (if any);
+    /// everyone else returns to their pre-minimize frame. Never N-way stack into
+    /// a half — that was crushing windows to ~180pt tall.
     private func restoreMinimizedCompanions(
         primary: AXUIElement,
         layout: WindowLayoutState,
@@ -258,19 +295,31 @@ public final class WindowRuntime: EventTapCaptureDelegate {
             return
         }
 
-        let frames = LayoutFrameResolver.companionFrames(for: layout, count: peers.count, in: screen)
+        let leftover = LayoutFrameResolver.companionFrames(
+            for: layout, count: 1, in: screen, gap: ReLaySettings.layoutPadding
+        ).first
         var restored: [AXUIElement] = []
         var restoredFrames: [CGRect] = []
+
         for (index, peer) in peers.enumerated() {
-            let ok = AXWindowOps.unminimize(peer)
+            let ok = AXWindowOps.unminimize(peer.window)
             if !ok {
                 Logger.log("unminimize peer failed", subsystem: "layout")
             }
-            if index < frames.count {
-                restored.append(peer)
-                restoredFrames.append(frames[index])
+            let target: CGRect?
+            if index == 0, let leftover, AXWindowOps.isWritableFrame(leftover) {
+                target = leftover
+            } else if AXWindowOps.isWritableFrame(peer.frame) {
+                target = peer.frame
+            } else {
+                target = nil
+            }
+            if let target {
+                restored.append(peer.window)
+                restoredFrames.append(target)
             }
         }
+
         if !restored.isEmpty {
             let height = NSScreen.screens.first?.frame.height ?? 0
             LayoutMotion.apply(
@@ -284,7 +333,10 @@ public final class WindowRuntime: EventTapCaptureDelegate {
             let delay = ReLaySettings.snapAnimateEnabled ? max(0.12, config.snapDuration * 0.55) : 0.05
             dividers.showLater(between: primary, and: placed, after: delay)
         }
-        Logger.log("restored \(peers.count) peer(s) after leaving fullscreen → \(layout)", subsystem: "layout")
+        Logger.log(
+            "restored \(peers.count) peer(s) after leaving fullscreen → \(layout) (no micro-stack)",
+            subsystem: "layout"
+        )
     }
 
     /// Send every other eligible window on `screen` to the Dock / Stage Manager.
@@ -314,6 +366,9 @@ public final class WindowRuntime: EventTapCaptureDelegate {
                WindowServerList.framesMatch(entry.bounds, primaryFrame) {
                 continue
             }
+            guard WindowEligibility.isTileableCGEntry(
+                pid: entry.pid, bounds: entry.bounds, on: screen
+            ) else { continue }
             let bundleID = NSRunningApplication(processIdentifier: entry.pid)?.bundleIdentifier ?? ""
             let candidate = CompanionSelector.Candidate(
                 id: z, frame: entry.bounds, bundleID: bundleID, zOrder: z
@@ -322,7 +377,8 @@ public final class WindowRuntime: EventTapCaptureDelegate {
             else { continue }
             if let win = AXWindowOps.window(pid: entry.pid, matching: entry.bounds)
                     ?? AXWindowOps.window(pid: entry.pid, matching: entry.bounds, tolerance: 24),
-               !CFEqual(win, primary) {
+               !CFEqual(win, primary),
+               WindowEligibility.isTileableWindow(win, on: screen) {
                 appendUnique(win)
             }
         }
@@ -330,6 +386,7 @@ public final class WindowRuntime: EventTapCaptureDelegate {
         // Fallback: AX enumeration when CG→AX matching misses Electron / mismatched frames.
         if result.isEmpty {
             for win in AXWindowOps.allVisible() where !CFEqual(win, primary) {
+                guard WindowEligibility.isTileableWindow(win, on: screen) else { continue }
                 guard let frame = AXWindowOps.frame(win) else { continue }
                 var pid: pid_t = 0
                 AXUIElementGetPid(win, &pid)
@@ -380,7 +437,9 @@ public final class WindowRuntime: EventTapCaptureDelegate {
         AXUIElementGetPid(window, &pid)
         let bid = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? ""
         guard WindowMutabilityPolicy.decision(for: bid) == .allow else { return }
-        let frame = LayoutFrameResolver.frame(for: .fullscreen, in: screen)
+        let frame = LayoutFrameResolver.frame(
+            for: .fullscreen, in: screen, gap: ReLaySettings.layoutPadding
+        )
         dividers.hideAll()
         let height = NSScreen.screens.first?.frame.height ?? 0
         LayoutMotion.apply(
@@ -404,6 +463,9 @@ public final class WindowRuntime: EventTapCaptureDelegate {
 
     static func usableScreen(containing frame: CGRect) -> CGRect {
         guard let primary = NSScreen.screens.first else { return .zero }
+        if frame.isEmpty || frame == .zero {
+            return mainUsableScreen()
+        }
         let toAX: (NSScreen) -> CGRect = { s in
             CGRect(x: s.frame.minX, y: primary.frame.height - s.frame.minY - s.frame.height,
                    width: s.frame.width, height: s.frame.height)
@@ -416,17 +478,30 @@ public final class WindowRuntime: EventTapCaptureDelegate {
                       width: vf.width, height: vf.height)
     }
 
-    /// Standard windows substantially overlapping `screen` (current Space).
+    /// Visible frame of the main screen in AX (top-left) coordinates.
+    static func mainUsableScreen() -> CGRect {
+        guard let primary = NSScreen.screens.first else { return .zero }
+        let target = NSScreen.main ?? primary
+        let vf = target.visibleFrame
+        return CGRect(
+            x: vf.minX,
+            y: primary.frame.height - vf.minY - vf.height,
+            width: vf.width,
+            height: vf.height
+        )
+    }
+
+    /// Tileable document windows substantially overlapping `screen` (current Space).
     /// Used to decide whether `.center` is offered as a swipe target.
+    /// Menu-bar / popup overlays are ignored so they don't block solo-window center.
     static func visibleWindowCount(on screen: CGRect) -> Int {
         guard !screen.isEmpty else { return 0 }
         let ownPID = ProcessInfo.processInfo.processIdentifier
         return WindowServerList.onScreenOrder().filter { entry in
             guard entry.pid != ownPID else { return false }
-            let overlap = entry.bounds.intersection(screen)
-            return overlap.width > CompanionSelector.minOverlapEdge
-                && overlap.height > CompanionSelector.minOverlapEdge
-                && overlap.width * overlap.height > CompanionSelector.minOverlapArea
+            return WindowEligibility.isTileableCGEntry(
+                pid: entry.pid, bounds: entry.bounds, on: screen
+            )
         }.count
     }
 

@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         Logger.log("application did finish launching", subsystem: "startup")
 
+        ReLaySettings.migrateEnableAutoLayoutV4IfNeeded()
         setupMenuBar()
         checkAccessibilityAndStart()
         checkConflicts()
@@ -112,17 +113,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "Open Layout Library", action: #selector(openExpose), keyEquivalent: " "))
-        menu.addItem(NSMenuItem(title: "Save Current Layout…", action: #selector(saveCurrentLayout), keyEquivalent: "s"))
-        menu.addItem(NSMenuItem(title: "Preferences…", action: #selector(openPreferences), keyEquivalent: ","))
+        menu.addItem(menuItem(title: "Open Layout Library", action: #selector(openExpose), keyEquivalent: " "))
+        menu.addItem(menuItem(title: "Save Current Layout…", action: #selector(saveCurrentLayout), keyEquivalent: "s"))
+        menu.addItem(menuItem(title: "Preferences…", action: #selector(openPreferences), keyEquivalent: ","))
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "Grant Accessibility…", action: #selector(openAccessibilitySettings), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "Undo Last Layout", action: #selector(undoLayout), keyEquivalent: "z"))
-        menu.addItem(NSMenuItem(title: "Shuffle Layout Windows", action: #selector(shuffleLayout), keyEquivalent: ""))
+        menu.addItem(menuItem(title: "Grant Accessibility…", action: #selector(openAccessibilitySettings), keyEquivalent: ""))
+        menu.addItem(menuItem(title: "Undo Last Layout", action: #selector(undoLayout), keyEquivalent: "z"))
+        menu.addItem(menuItem(title: "Shuffle Layout Windows", action: #selector(shuffleLayout), keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit ReLay", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         menu.delegate = self
         statusItem?.menu = menu
+    }
+
+    /// Status-item menus in an accessory app need an explicit target; nil-target
+    /// selectors often never reach the AppDelegate.
+    private func menuItem(title: String, action: Selector, keyEquivalent: String) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: keyEquivalent)
+        item.target = self
+        return item
     }
 
     @objc private func openExpose() {
@@ -195,7 +204,8 @@ extension AppDelegate: NSMenuDelegate {
             let item = NSMenuItem(title: entry.name,
                                   action: #selector(applyRecentLayout(_:)),
                                   keyEquivalent: "\(i + 1)")
-            item.keyEquivalentModifierMask = NSEvent.ModifierFlags([.command, .option])
+            item.keyEquivalentModifierMask = [.command, .option]
+            item.target = self
             item.tag = AppDelegate.recentItemTag
             item.representedObject = entry.id
             menu.insertItem(item, at: i)

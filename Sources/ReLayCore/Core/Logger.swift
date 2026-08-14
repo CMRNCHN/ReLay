@@ -16,10 +16,28 @@ public enum Logger {
         return libraryDirectory.appendingPathComponent("ReLay-Crash.log")
     }
 
+    private static var appLogURL: URL {
+        let paths = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)
+        let libraryDirectory = paths[0].appendingPathComponent("Logs")
+        try? FileManager.default.createDirectory(at: libraryDirectory, withIntermediateDirectories: true)
+        return libraryDirectory.appendingPathComponent("ReLay.log")
+    }
+
     public static func log(_ message: String, subsystem: String) {
         let timestamp = formatter.string(from: Date())
         let line = "[\(timestamp)] [\(subsystem)] \(message)\n"
         FileHandle.standardOutput.write(Data(line.utf8))
+        // Menu-bar apps have no visible console — mirror to a file for diagnosis.
+        if let data = line.data(using: .utf8) {
+            if FileManager.default.fileExists(atPath: appLogURL.path),
+               let handle = try? FileHandle(forWritingTo: appLogURL) {
+                handle.seekToEndOfFile()
+                handle.write(data)
+                try? handle.close()
+            } else {
+                try? data.write(to: appLogURL)
+            }
+        }
     }
 
     public static func setupCrashHandling() {

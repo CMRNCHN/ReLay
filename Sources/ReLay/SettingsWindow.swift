@@ -39,7 +39,7 @@ private enum SettingsTab: Int, CaseIterable {
     var caption: String? {
         switch self {
         case .general:
-            return "Control whether ReLay is active and manage system permissions."
+            return "Control whether ReLay is active, tiling padding, and system permissions."
         case .gestures:
             return "Fine-tune how ReLay recognises your title-bar swipes."
         case .animation:
@@ -61,9 +61,35 @@ private struct SliderSetting {
     let defaultValue: Double
     let endpointMin: String
     let endpointMax: String
+    /// When true, an explicit stored `0` is kept (padding can be flush).
+    let allowsZero: Bool
+
+    init(
+        key: String,
+        title: String,
+        description: String,
+        min: Double,
+        max: Double,
+        defaultValue: Double,
+        endpointMin: String,
+        endpointMax: String,
+        allowsZero: Bool = false
+    ) {
+        self.key = key
+        self.title = title
+        self.description = description
+        self.min = min
+        self.max = max
+        self.defaultValue = defaultValue
+        self.endpointMin = endpointMin
+        self.endpointMax = endpointMax
+        self.allowsZero = allowsZero
+    }
 
     var stored: Double {
+        guard UserDefaults.standard.object(forKey: key) != nil else { return defaultValue }
         let v = UserDefaults.standard.double(forKey: key)
+        if allowsZero { return Swift.max(0, v) }
         return v > 0 ? v : defaultValue
     }
 }
@@ -109,6 +135,15 @@ final class SettingsWindowController: NSWindowController {
         description: "How long the settle animation lasts after a successful swipe.",
         min: 0.08, max: 0.55, defaultValue: ReLaySettings.Default.snapDuration,
         endpointMin: "Instant", endpointMax: "Cinematic"
+    )
+
+    private let paddingSlider = SliderSetting(
+        key: ReLaySettings.Key.layoutPadding,
+        title: "Window Padding",
+        description: "Space between tiled windows and the screen edges. Also used as the gap between neighbouring tiles.",
+        min: 0, max: 32, defaultValue: ReLaySettings.Default.layoutPadding,
+        endpointMin: "Flush", endpointMax: "Spacious",
+        allowsZero: true
     )
 
     private let animationPresets: [FeelPreset] = [
@@ -269,7 +304,7 @@ final class SettingsWindowController: NSWindowController {
             button.isSelected = (key == tab)
         }
 
-        if tab == .gestures || tab == .animation {
+        if tab == .gestures || tab == .animation || tab == .general {
             sliders.removeAll()
             sliderKeys.removeAll()
         }
@@ -332,7 +367,7 @@ final class SettingsWindowController: NSWindowController {
 
     private func paneContent(for tab: SettingsTab) -> [NSView] {
         switch tab {
-        case .general:   return [generalPane()]
+        case .general:   return generalPane()
         case .gestures:  return gesturesPane()
         case .animation: return animationPane()
         case .advanced:  return advancedPane()
@@ -341,7 +376,7 @@ final class SettingsWindowController: NSWindowController {
 
     // MARK: - Panes
 
-    private func generalPane() -> NSView {
+    private func generalPane() -> [NSView] {
         let status = NSTextField(labelWithString: ReLaySettings.interceptionEnabled ? "Active" : "Paused")
         status.font = .systemFont(ofSize: 12, weight: .semibold)
         status.textColor = ReLaySettings.interceptionEnabled ? .systemGreen : .systemOrange
@@ -367,14 +402,31 @@ final class SettingsWindowController: NSWindowController {
             }
         )
 
+        let autoLayoutRow = buildToggleRow(
+            title: "Auto-Tile New Windows",
+            description: "When a new window opens on a screen, retile that screen: 2 → halves, 3 → thirds, 4 → 2×2 grid. Extra windows beyond four are left alone.",
+            key: ReLaySettings.Key.autoLayoutEnabled,
+            defaultOn: ReLaySettings.Default.autoLayoutEnabled,
+            switchRef: { _ in }
+        )
+
+        let paddingRow = buildSliderRow(for: paddingSlider, index: 0)
+
         let accessibilityBtn = NSButton(title: "Open Accessibility Settings…", target: self, action: #selector(openAccessibilitySettings))
         accessibilityBtn.bezelStyle = .rounded
 
-        return cardBody(rows: [
-            statusRow,
-            interceptRow,
-            accessibilityBtn,
-        ])
+        return [
+            settingsCard(
+                title: "Status",
+                caption: nil,
+                rows: [statusRow, interceptRow, accessibilityBtn]
+            ),
+            settingsCard(
+                title: "Tiling",
+                caption: "How new windows join a screen and how much air sits between tiles.",
+                rows: [autoLayoutRow, paddingRow]
+            ),
+        ]
     }
 
     private func gesturesPane() -> [NSView] {
@@ -725,6 +777,8 @@ final class SettingsWindowController: NSWindowController {
                 sliders[index].doubleValue = ReLaySettings.Default.actionThreshold
             case ReLaySettings.Key.snapDuration:
                 sliders[index].doubleValue = ReLaySettings.Default.snapDuration
+            case ReLaySettings.Key.layoutPadding:
+                sliders[index].doubleValue = ReLaySettings.Default.layoutPadding
             default:
                 break
             }

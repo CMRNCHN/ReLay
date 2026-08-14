@@ -9,10 +9,12 @@ enum WindowEdge: Hashable, CaseIterable {
 
 enum LinkedResize {
 
-    static let edgeThickness: CGFloat = 10
-    static let shareTolerance: CGFloat = 18
+    /// Hit band around a window chrome edge (points). Wide enough to catch
+    /// clicks in the padding gap between tiles as well as the chrome itself.
+    static let edgeThickness: CGFloat = 16
+    static let shareTolerance: CGFloat = 24
     static let minOverlap: CGFloat = 60
-    static let minNeighborSize: CGFloat = 160
+    static let minNeighborSize: CGFloat = 280
     static let defaultGap: CGFloat = 8
 
     /// Which outer edge of `frame` contains `point`, if any.

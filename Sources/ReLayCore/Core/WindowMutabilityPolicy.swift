@@ -26,6 +26,21 @@ enum WindowMutabilityPolicy {
 
     static let defaultDecision: WindowMutabilityDecision = .allow
 
+    /// System UI / menu-bar hosts that must never be moved or counted as tiles.
+    private static let deniedBundleIDs: Set<String> = [
+        "com.apple.systemuiserver",
+        "com.apple.controlcenter",
+        "com.apple.notificationcenterui",
+        "com.apple.Spotlight",
+        "com.apple.TextInputMenuAgent",
+        "com.apple.loginwindow",
+        "com.apple.dock",
+        "com.apple.WindowManager",
+        "com.apple.AccessibilityUIServer",
+        "com.apple.UserNotificationCenter",
+        "com.apple.screencaptureui",
+    ]
+
     private static let entries: [String: WindowMutabilityProfile] = [
         "com.apple.finder": WindowMutabilityProfile(
             bundleID: "com.apple.finder",
@@ -86,6 +101,7 @@ enum WindowMutabilityPolicy {
     ]
 
     static func decision(for bundleID: String) -> WindowMutabilityDecision {
+        if deniedBundleIDs.contains(bundleID) { return .deny }
         guard let profile = entries[bundleID] else { return defaultDecision }
         return evaluate(profile)
     }

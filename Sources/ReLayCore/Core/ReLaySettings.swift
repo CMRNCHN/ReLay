@@ -19,6 +19,8 @@ public enum ReLaySettings {
         public static let interceptionEnabled = "interceptionEnabled"
         public static let snapPreviewEnabled = "snapPreviewEnabled"
         public static let snapAnimateEnabled = "snapAnimateEnabled"
+        public static let autoLayoutEnabled = "autoLayoutEnabled"
+        public static let layoutPadding = "layoutPadding"
     }
 
     // MARK: - Defaults
@@ -34,6 +36,10 @@ public enum ReLaySettings {
         /// Destination silhouette during swipe — off by default (was the "ghost").
         public static let snapPreviewEnabled = false
         public static let snapAnimateEnabled = true
+        /// Auto-tile when a new window appears (2→halves, 3→thirds, 4→2×2 grid).
+        public static let autoLayoutEnabled = true
+        /// Gap between tiled windows and the screen edge (points).
+        public static let layoutPadding: Double = 8
     }
 
     // MARK: - Read
@@ -74,6 +80,15 @@ public enum ReLaySettings {
         bool(forKey: Key.snapAnimateEnabled, default: Default.snapAnimateEnabled)
     }
 
+    public static var autoLayoutEnabled: Bool {
+        bool(forKey: Key.autoLayoutEnabled, default: Default.autoLayoutEnabled)
+    }
+
+    /// Padding between windows and screen edges / neighbouring tiles.
+    public static var layoutPadding: CGFloat {
+        CGFloat(nonNegativeDouble(forKey: Key.layoutPadding, default: Default.layoutPadding))
+    }
+
     // MARK: - Write
 
     public static func set(_ value: Double, forKey key: String) {
@@ -96,6 +111,18 @@ public enum ReLaySettings {
         set(Default.interceptionEnabled, forKey: Key.interceptionEnabled)
         set(Default.snapPreviewEnabled, forKey: Key.snapPreviewEnabled)
         set(Default.snapAnimateEnabled, forKey: Key.snapAnimateEnabled)
+        set(Default.autoLayoutEnabled, forKey: Key.autoLayoutEnabled)
+        set(Default.layoutPadding, forKey: Key.layoutPadding)
+    }
+
+    /// One-shot: turn auto-tile on for the 3rd/4th-window join behavior.
+    /// Supersedes the earlier V3 force-off (tiny-window stacking is guarded now).
+    public static func migrateEnableAutoLayoutV4IfNeeded() {
+        let flag = "didEnableAutoLayoutV4"
+        guard UserDefaults.standard.object(forKey: flag) == nil else { return }
+        UserDefaults.standard.set(true, forKey: Key.autoLayoutEnabled)
+        UserDefaults.standard.set(true, forKey: flag)
+        postSettingsChanged()
     }
 
     public static func postSettingsChanged() {
@@ -107,6 +134,12 @@ public enum ReLaySettings {
     private static func positiveDouble(forKey key: String, default defaultValue: Double) -> Double {
         let stored = UserDefaults.standard.double(forKey: key)
         return stored > 0 ? stored : defaultValue
+    }
+
+    /// Like `positiveDouble`, but allows an explicit stored `0`.
+    private static func nonNegativeDouble(forKey key: String, default defaultValue: Double) -> Double {
+        guard UserDefaults.standard.object(forKey: key) != nil else { return defaultValue }
+        return max(0, UserDefaults.standard.double(forKey: key))
     }
 
     private static func bool(forKey key: String, default defaultValue: Bool) -> Bool {

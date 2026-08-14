@@ -3,12 +3,18 @@ import ApplicationServices
 
 // MARK: - Auto Layout Watcher
 // Detects a *stable* new on-screen window (dock launch / Stage Manager) and
-// tiles when the desk has 2 or 3 standard windows.
+// tiles when that screen has 2–4 standard windows (halves → thirds → 2×2).
+//
+// Menu-bar dropdowns, floating panels, and popups are filtered out via
+// WindowEligibility so they never inflate the tile count or get resized.
 //
 // Deliberately does NOT expand to fullscreen when a window disappears —
 // CGWindowList flickers constantly (overlays, Spaces, Stage Manager), and
 // that path was randomly blowing windows up to fill-screen. Solo expand
 // stays on the explicit minimize gesture in WindowRuntime.
+//
+// Only windows on the *same* usable screen as the newcomer are counted, so a
+// second display does not inflate the tile count.
 
 final class AutoLayoutWatcher {
 
@@ -60,7 +66,11 @@ final class AutoLayoutWatcher {
     }
 
     func suspendBriefly() {
-        suspendedUntil = Date().addingTimeInterval(cooldown)
+        suspend(for: cooldown)
+    }
+
+    func suspend(for duration: TimeInterval) {
+        suspendedUntil = Date().addingTimeInterval(duration)
         pendingAdded = []
         pendingAddedSince = nil
     }
@@ -84,10 +94,10 @@ final class AutoLayoutWatcher {
         }
 
         if !added.isEmpty {
-            // Only care about added IDs that look like real windows.
+            // Only care about added IDs that look like real tileable windows.
             let realAdds = Set(
                 snapshot
-                    .filter { added.contains($0.id) && isEligibleSize($0.axBounds) }
+                    .filter { added.contains($0.id) && isTileableCG($0) }
                     .map(\.id)
             )
             if !realAdds.isEmpty {
@@ -120,39 +130,40 @@ final class AutoLayoutWatcher {
     }
 
     private func tryTile(_ snapshot: [Entry], requiringNewIDs newIDs: Set<CGWindowID>) {
-        let eligible = eligibleEntries(from: snapshot)
-        guard eligible.count == 2 || eligible.count == 3 else { return }
-        // At least one of the settled new IDs must still be among the eligible
-        // set — otherwise this was a transient overlay, not a real window.
-        let eligibleIDs = Set(eligible.map(\.id))
-        guard !newIDs.isDisjoint(with: eligibleIDs) else { return }
+        // Anchor the screen to a newly appeared window so we only retile that display.
+        guard let newcomer = snapshot.first(where: { newIDs.contains($0.id) && isTileableCG($0) })
+                ?? snapshot.first(where: { newIDs.contains($0.id) })
+        else { return }
 
-        let screen = WindowRuntime.usableScreen(containing: eligible[0].axBounds)
-        guard let frames = AutoLayoutEngine.frames(for: eligible.count, in: screen),
-              frames.count == eligible.count
+        let screen = WindowRuntime.usableScreen(containing: newcomer.axBounds)
+        guard screen != .zero else { return }
+
+        // Resolve AX and drop popups / accessory apps / non-resizable floaters.
+        let resolved = resolveTileable(from: snapshot, on: screen)
+        guard (2...AutoLayoutEngine.maxTileCount).contains(resolved.count) else { return }
+
+        // At least one settled new ID must still be among the tileable set.
+        let resolvedIDs = Set(resolved.map(\.entry.id))
+        guard !newIDs.isDisjoint(with: resolvedIDs) else {
+            Logger.log("auto-layout skip — newcomer not tileable", subsystem: "layout")
+            return
+        }
+
+        let gap = ReLaySettings.layoutPadding
+        guard let frames = AutoLayoutEngine.frames(for: resolved.count, in: screen, gap: gap),
+              frames.count == resolved.count
         else { return }
 
         // Skip if the desk already matches the target tile (within tolerance).
-        if alreadyTiled(eligible, frames: frames) {
+        if alreadyTiled(resolved.map(\.entry), frames: frames) {
             Logger.log("auto-layout skip — already tiled", subsystem: "layout")
             return
         }
 
-        var windows: [AXUIElement] = []
-        for entry in eligible.reversed() {
-            let bid = NSRunningApplication(processIdentifier: entry.pid)?.bundleIdentifier ?? ""
-            guard WindowMutabilityPolicy.decision(for: bid) == .allow else { return }
-            guard let win = AXWindowOps.window(pid: entry.pid, matching: entry.axBounds)
-                    ?? AXWindowOps.window(pid: entry.pid, matching: entry.axBounds, tolerance: 24)
-            else { return }
-            // Confirm it's a real standard window before moving anything.
-            guard AXWindowOps.isStandardWindow(win) else { return }
-            windows.append(win)
-        }
-        guard windows.count == frames.count else { return }
-
+        // resolved is front-to-back; frames expect oldest → newest.
+        let windows = resolved.map(\.window).reversed()
         Logger.log("auto-layout tile count=\(windows.count)", subsystem: "layout")
-        onApply?(windows, frames, screen)
+        onApply?(Array(windows), frames, screen)
         suspendBriefly()
     }
 
@@ -171,12 +182,38 @@ final class AutoLayoutWatcher {
         return true
     }
 
-    private func isEligibleSize(_ bounds: CGRect) -> Bool {
-        bounds.width > 200 && bounds.height > 200
+    private func isTileableCG(_ entry: Entry) -> Bool {
+        let screen = WindowRuntime.usableScreen(containing: entry.axBounds)
+        guard screen != .zero else { return false }
+        return WindowEligibility.isTileableCGEntry(
+            pid: entry.pid, bounds: entry.axBounds, on: screen
+        )
     }
 
-    private func eligibleEntries(from snapshot: [Entry]) -> [Entry] {
-        snapshot.filter { isEligibleSize($0.axBounds) }
+    private struct Resolved {
+        let entry: Entry
+        let window: AXUIElement
+    }
+
+    /// Front-to-back tileable windows on `screen`. Non-tileable overlays are
+    /// skipped — they keep their original size and never take a tile slot.
+    private func resolveTileable(from snapshot: [Entry], on screen: CGRect) -> [Resolved] {
+        var result: [Resolved] = []
+        for entry in snapshot {
+            guard WindowEligibility.isTileableCGEntry(
+                pid: entry.pid, bounds: entry.axBounds, on: screen
+            ) else { continue }
+
+            guard let win = AXWindowOps.window(pid: entry.pid, matching: entry.axBounds)
+                    ?? AXWindowOps.window(pid: entry.pid, matching: entry.axBounds, tolerance: 24)
+            else { continue }
+
+            guard WindowEligibility.isTileableWindow(win, on: screen) else { continue }
+            if result.contains(where: { CFEqual($0.window, win) }) { continue }
+            result.append(Resolved(entry: entry, window: win))
+            if result.count >= AutoLayoutEngine.maxTileCount { break }
+        }
+        return result
     }
 
     // MARK: - CG snapshot
@@ -210,6 +247,11 @@ final class AutoLayoutWatcher {
             if let layer = dict[kCGWindowLayer as String] as? Int, layer != 0 {
                 return nil
             }
+            if let alpha = dict[kCGWindowAlpha as String] as? CGFloat, alpha < 0.05 {
+                return nil
+            }
+            // Cheap early reject: accessory / menu-bar apps never tile.
+            guard WindowEligibility.isRegularApp(pid: pid) else { return nil }
             return Entry(id: id, pid: pid, axBounds: CGRect(x: x, y: y, width: w, height: h))
         }
     }

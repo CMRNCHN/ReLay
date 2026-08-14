@@ -110,29 +110,15 @@ final class SmartSuggestionTests: XCTestCase {
     func testAutoFillLogic() {
         let template = LayoutTemplate.all.first { $0.id == "coding" }!
         let windows: [LayoutWindowItem] = [
-            mockItem(id: "1", app: "iTerm", title: "Terminal", role: .terminal),
-            mockItem(id: "2", app: "Xcode", title: "Code", role: .editor),
-            mockItem(id: "3", app: "Safari", title: "Docs", role: .browser)
+            mockItem(id: "1", app: "iTerm", title: "Terminal", role: .terminal, bundleID: "com.googlecode.iterm2"),
+            mockItem(id: "2", app: "Xcode", title: "Code", role: .editor, bundleID: "com.apple.dt.Xcode"),
+            mockItem(id: "3", app: "Safari", title: "Docs", role: .browser, bundleID: "com.apple.Safari")
         ]
-        
-        // Manual simulation of autoFillAssignments logic
-        var assignments: [Int: LayoutWindowItem] = [:]
-        var remainingWindows = windows
-        
-        for slot in template.slots {
-            if let index = remainingWindows.firstIndex(where: { slot.preferredRoles.contains($0.role) }) {
-                assignments[slot.id] = remainingWindows.remove(at: index)
-            }
-        }
-        
-        for slot in template.slots {
-            if assignments[slot.id] == nil && !remainingWindows.isEmpty {
-                assignments[slot.id] = remainingWindows.remove(at: 0)
-            }
-        }
-        
-        XCTAssertEqual(assignments[0]?.role, .editor, "Main slot should have Editor")
-        XCTAssertEqual(assignments[2]?.role, .terminal, "Bottom-right slot should have Terminal")
+
+        let assignments = LayoutAssignment.autoFill(template: template, windows: windows)
+
+        XCTAssertEqual(assignments[0], "com.apple.dt.Xcode", "Main slot should have Editor")
+        XCTAssertEqual(assignments[2], "com.googlecode.iterm2", "Bottom-right slot should have Terminal")
     }
     
     private func mockItem(id: String, app: String, title: String, role: WindowRole, bundleID: String? = nil) -> LayoutWindowItem {

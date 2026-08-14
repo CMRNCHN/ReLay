@@ -48,6 +48,41 @@ final class CompanionLayoutTests: XCTestCase {
         XCTAssertTrue(LayoutFrameResolver.companionFrames(for: .leftHalf, count: 0, in: screen).isEmpty)
     }
 
+    func testManyCompanionsNeverMicroStack() {
+        let frames = LayoutFrameResolver.companionFrames(for: .leftHalf, count: 6, in: screen, gap: gap)
+        XCTAssertLessThanOrEqual(frames.count, LayoutFrameResolver.maxStackedCompanions)
+        for frame in frames {
+            XCTAssertGreaterThanOrEqual(frame.height, AXWindowOps.minWritableHeight)
+            XCTAssertGreaterThanOrEqual(frame.width, AXWindowOps.minWritableWidth)
+        }
+    }
+
+    func testLeavingFullscreenWithManyPeersRestoresSavedFrames() {
+        let sim = RuntimeMirror()
+        let left = LayoutFrameResolver.frame(for: .leftHalf, in: sim.screen)
+        sim.frames[101] = left
+        // Five peers with healthy sizes before fullscreen.
+        for (i, pid) in [102, 103, 104, 105, 106].enumerated() {
+            sim.frames[pid] = CGRect(x: 600, y: CGFloat(40 + i * 40), width: 500, height: 400)
+            sim.bundleIDs[pid] = "com.example.\(pid)"
+        }
+        sim.bundleIDs[101] = "com.example.a"
+
+        sim.swipe(on: 101, dx: 0, dy: -200) // → twoThirds
+        sim.swipe(on: 101, dx: 0, dy: -200) // → fullscreen
+        XCTAssertEqual(sim.layout, .fullscreen)
+        XCTAssertEqual(Set(sim.minimized), Set([102, 103, 104, 105, 106]))
+
+        sim.swipe(on: 101, dx: 0, dy: 200) // leave fullscreen → twoThirds
+        XCTAssertEqual(sim.layout, .leftTwoThirds)
+        // No peer should be crushed below the writable floor.
+        for pid in [102, 103, 104, 105, 106] as [pid_t] {
+            let frame = sim.frames[pid]!
+            XCTAssertGreaterThanOrEqual(frame.height, AXWindowOps.minWritableHeight, "pid \(pid)")
+            XCTAssertGreaterThanOrEqual(frame.width, AXWindowOps.minWritableWidth, "pid \(pid)")
+        }
+    }
+
     func testThirdToFullscreenMinimizesOthers() {
         XCTAssertTrue(WindowRuntime.shouldMinimizeOthers(from: .leftThird, to: .fullscreen))
         XCTAssertTrue(WindowRuntime.shouldMinimizeOthers(from: .rightThird, to: .fullscreen))

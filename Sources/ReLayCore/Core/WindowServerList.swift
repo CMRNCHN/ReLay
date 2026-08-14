@@ -14,10 +14,15 @@ enum WindowServerList {
         let pid: pid_t
         /// Quartz / AX top-left global coordinates.
         let bounds: CGRect
+        /// Window server layer. Normal app windows are `0`.
+        let layer: Int
+        let alpha: CGFloat
     }
 
     /// Front-to-back, current Space only, desktop elements excluded.
-    static func onScreenOrder() -> [Entry] {
+    /// - Parameter normalLayerOnly: When true (default), skip non-zero layers
+    ///   (menus, status items, HUDs that sit above the desktop).
+    static func onScreenOrder(normalLayerOnly: Bool = true) -> [Entry] {
         let info = CGWindowListCopyWindowInfo(
             [.optionOnScreenOnly, .excludeDesktopElements],
             kCGNullWindowID
@@ -28,7 +33,16 @@ enum WindowServerList {
                   let b = entry[kCGWindowBounds as String] as? [String: CGFloat],
                   let x = b["X"], let y = b["Y"], let w = b["Width"], let h = b["Height"]
             else { return nil }
-            return Entry(pid: pid, bounds: CGRect(x: x, y: y, width: w, height: h))
+            let layer = entry[kCGWindowLayer as String] as? Int ?? 0
+            if normalLayerOnly, layer != 0 { return nil }
+            let alpha = entry[kCGWindowAlpha as String] as? CGFloat ?? 1
+            if alpha < 0.05 { return nil }
+            return Entry(
+                pid: pid,
+                bounds: CGRect(x: x, y: y, width: w, height: h),
+                layer: layer,
+                alpha: alpha
+            )
         }
     }
 

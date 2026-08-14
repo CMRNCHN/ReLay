@@ -23,9 +23,26 @@ final class AutoLayoutEngineTests: XCTestCase {
         XCTAssertEqual(frames[1].maxX + gap, frames[2].minX, accuracy: 0.5)
     }
 
+    func testFourWindowsBecomeGrid() {
+        let frames = AutoLayoutEngine.frames(for: 4, in: screen, gap: gap)!
+        XCTAssertEqual(frames.count, 4)
+        // Oldest → newest: TL, TR, BL, BR
+        XCTAssertEqual(frames[0].minX, frames[2].minX, accuracy: 0.5) // left column
+        XCTAssertEqual(frames[1].minX, frames[3].minX, accuracy: 0.5) // right column
+        XCTAssertEqual(frames[0].minY, frames[1].minY, accuracy: 0.5) // top row
+        XCTAssertEqual(frames[2].minY, frames[3].minY, accuracy: 0.5) // bottom row
+        for frame in frames {
+            XCTAssertGreaterThanOrEqual(frame.width, AXWindowOps.minWritableWidth)
+            XCTAssertGreaterThanOrEqual(frame.height, AXWindowOps.minWritableHeight)
+        }
+        // Newest (last) is bottom-right.
+        XCTAssertGreaterThan(frames[3].minX, frames[0].minX)
+        XCTAssertGreaterThan(frames[3].minY, frames[0].minY)
+    }
+
     func testOtherCountsAreIgnored() {
         XCTAssertNil(AutoLayoutEngine.frames(for: 1, in: screen))
-        XCTAssertNil(AutoLayoutEngine.frames(for: 4, in: screen))
+        XCTAssertNil(AutoLayoutEngine.frames(for: 5, in: screen))
         XCTAssertNil(AutoLayoutEngine.frames(for: 0, in: screen))
     }
 
